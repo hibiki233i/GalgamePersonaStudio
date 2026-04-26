@@ -610,7 +610,7 @@ public partial class MainWindow : Window
             ["traits"] = traits,
             ["dialogue_pairs"] = JsonSerializer.SerializeToNode(BuildDialoguePairs(character), JsonOptions()),
             ["example_exchanges"] = JsonSerializer.SerializeToNode(exampleExchanges, JsonOptions()),
-            ["error_reply"] = $"{character}：这个我还不能确定呢。等我想清楚了，再好好回答你。",
+            ["error_reply"] = $"{character}：唔…现在有点没法好好回应你。下次再说吧。",
             ["evidence_metadata"] = JsonSerializer.SerializeToNode(evidence.Metadata, JsonOptions()),
             ["evidence"] = JsonSerializer.SerializeToNode(evidence.Entries.Select(ToOutputEntry), JsonOptions())
         };
@@ -838,7 +838,7 @@ public partial class MainWindow : Window
 
         ============================================================
         ### error_reply
-        当被问及证据不足的话题时，角色用符合自己口吻的方式婉拒（30-60 字）。不能直接说"我不知道"，要用角色特有的语气。
+        这个字段用于后端 LLM 出错或超时时的降级回复。请写一句符合角色口吻的、能自然结束当前话题的回应（15-40 字）。例如「嗯…现在暂时没法好好回答你，换个时间再说吧。」不能用"出错""超时""错误"等词，必须像是角色自己在说话。要覆盖不同情绪氛围——在暧昧场景中可用带害羞的推脱，在争执场景中可用无奈的中断，日常对话中可用自然的岔开。
 
         ## 核心原则
         - 所有分析必须有台词证据支撑，不编造无证据的设定

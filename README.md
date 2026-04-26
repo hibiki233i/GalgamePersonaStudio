@@ -19,7 +19,7 @@
 - **traits**：人格特质列表（含台词证据引用）
 - **dialogue_pairs**：预设对话示例（覆盖多种场景）
 - **example_exchanges**：代表性原作对话片段
-- **error_reply**：证据不足时的婉拒回复
+- **error_reply**：后端 LLM 出错或超时时的降级回复，保持角色口吻
 
 ### 实时记录（推荐使用[Umi-OCR](https://github.com/hiroi-sora/Umi-OCR)）
 - **Clipboard 模式**：监听剪贴板，配合外部工具抓取译文
