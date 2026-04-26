@@ -302,7 +302,7 @@
                         <Button Style="{StaticResource SidebarNavButton}" Tag="record" Click="SidebarNav_Click">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="◆" FontSize="10" Foreground="#94A3B8" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <TextBlock Text="实时记录" Foreground="#E2E8F0" VerticalAlignment="Center"/>
+                                <TextBlock Text="实时/自动记录" Foreground="#E2E8F0" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                         <Button Style="{StaticResource SidebarNavButton}" Tag="log" Click="SidebarNav_Click">
@@ -379,7 +379,7 @@
                             <StackPanel Grid.Row="1">
                                 <TextBlock Text="人格提炼方式" Style="{StaticResource SectionSubtitle}"/>
                                 <ComboBox x:Name="ProviderCombo" SelectionChanged="ProviderCombo_SelectionChanged" Style="{StaticResource ModernComboBox}" ItemContainerStyle="{StaticResource ModernComboBoxItem}">
-                                    <ComboBoxItem Content="本地规则"/>
+                                    <ComboBoxItem Content="本地规则（不推荐）"/>
                                     <ComboBoxItem Content="Ollama / 开源本地模型"/>
                                     <ComboBoxItem Content="OpenAI-compatible API"/>
                                 </ComboBox>
@@ -647,6 +647,73 @@
                             <TextBlock Text="Umi-OCR API 地址" Style="{StaticResource SectionSubtitle}"/>
                             <TextBox x:Name="UmiOcrEndpointBox" Text="http://127.0.0.1:1224" Margin="0,4,0,0"/>
                             <TextBlock Text="在 Umi-OCR 的全局设置 → 高级中开启 HTTP 接口。保持默认端口 1224。" Foreground="#94A3B8" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Auto-Advance Card -->
+                    <Border x:Name="AutoAdvancePanel" Style="{StaticResource PanelBorder}">
+                        <StackPanel>
+                            <CheckBox x:Name="AutoAdvanceCheck" Content="启用自动翻页" Checked="AutoAdvance_Changed" Unchecked="AutoAdvance_Changed"/>
+                            <StackPanel x:Name="AutoAdvanceConfigPanel" Margin="0,8,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="翻页点击位置:" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="AdvanceClickBox" Grid.Column="1" Margin="8,0" IsReadOnly="True"/>
+                                    <Button Grid.Column="2" Content="拾取位置" Click="PickAdvancePoint_Click" Style="{StaticResource SecondaryButton}"/>
+                                </Grid>
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="翻页后等待(秒):" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="PostClickDelayBox" Text="1.2" Width="60" Margin="6,0,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="12,0,0,0">
+                                        <TextBlock Text="判定选择肢/卡死重试阈值:" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="StuckThresholdBox" Text="5" Width="50" Margin="6,0,0,0"/>
+                                        <TextBlock Text="次" VerticalAlignment="Center" Margin="2,0,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Choice Detection Card -->
+                    <Border x:Name="ChoicePanel" Style="{StaticResource PanelBorder}">
+                        <StackPanel>
+                            <CheckBox x:Name="ChoiceDetectionCheck" Content="启用选择肢检测" Checked="ChoiceDetection_Changed" Unchecked="ChoiceDetection_Changed"/>
+                            <StackPanel x:Name="ChoiceConfigPanel" Margin="0,8,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="选择肢处理:" VerticalAlignment="Center"/>
+                                    <ComboBox x:Name="ChoiceModeCombo" SelectionChanged="ChoiceModeCombo_SelectionChanged" Grid.Column="1" Margin="8,0" Style="{StaticResource ModernComboBox}" ItemContainerStyle="{StaticResource ModernComboBoxItem}">
+                                        <ComboBoxItem Content="弹窗手动选择"/>
+                                        <ComboBoxItem Content="自动选择"/>
+                                    </ComboBox>
+                                </Grid>
+                                <Grid x:Name="ChoiceAutoConfig" Margin="0,8,0,0" Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="自动规则:" VerticalAlignment="Center"/>
+                                    <ComboBox x:Name="ChoiceAutoRuleCombo" Grid.Column="1" Margin="8,0" Style="{StaticResource ModernComboBox}" ItemContainerStyle="{StaticResource ModernComboBoxItem}">
+                                        <ComboBoxItem Content="选择第一个"/>
+                                        <ComboBoxItem Content="选择最后一个"/>
+                                    </ComboBox>
+                                </Grid>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 

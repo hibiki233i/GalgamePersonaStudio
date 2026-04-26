@@ -29,15 +29,14 @@ public partial class MainWindow : Window
     private const string SettingsFileName = "wpf_studio_settings.json";
     private const string OllamaChatEndpoint = "http://localhost:11434/v1/chat/completions";
     private const string OllamaEmbeddingEndpoint = "http://localhost:11434/v1/embeddings";
-    private const string DefaultChatModel = "gpt-4o-mini";
-    private const string DefaultEmbeddingModel = "mxbai-embed-large";
+    private const string DefaultChatModel = "gpt-5.4";
+    private const string DefaultEmbeddingModel = "text-embedding-3-large";
     private const string DefaultVisionEndpoint = "https://api.openai.com/v1/chat/completions";
     private const string DefaultVisionModel = "gpt-4o-mini";
     private const string AppVersion = "1.0.1";
     private const string RepoOwner = "hibiki233i";
     private const string RepoName = "GalgamePersonaStudio";
 
-    private static readonly Regex PureSoundPattern = new(@"^[぀-ヿ　-〿\s!?！？、。…～〜ー\-,]+$", RegexOptions.Compiled);
     private static readonly Regex TokenRegex = new(@"[\u3040-\u30ff\u3400-\u9fffA-Za-z0-9ー]{2,}", RegexOptions.Compiled);
     private static readonly Regex SpeakerPrefixRegex = new(@"^([^:：「」\n]{1,24})[:：]\s*(.+)$", RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex EmotionKanjiRegex = new(@"[嬉怒哀楽泣笑驚悩悲]", RegexOptions.Compiled);
@@ -53,6 +52,9 @@ public partial class MainWindow : Window
     private bool _isSidebarCollapsed;
     private System.Windows.Threading.DispatcherTimer? _settingsSaveTimer;
     private readonly string? _logFilePath = TryCreateLogFilePath();
+    private AutoAdvanceManager? _autoAdvance;
+    private string _lastRecordedName = "";
+    private string _lastRecordedMessage = "";
 
     private static string DetectGameName(List<ScriptEntry> entries)
     {
@@ -235,6 +237,16 @@ public partial class MainWindow : Window
         OnlyAfterBox.Text = _settings.OnlyAfterCount <= 0 ? "200" : _settings.OnlyAfterCount.ToString();
         AllowedNamesBox.Text = _settings.AllowedNames ?? "";
         ExampleCharFilterBox.Text = _settings.ExampleCharFilter ?? "";
+        AutoAdvanceCheck.IsChecked = _settings.AutoAdvanceEnabled;
+        AutoAdvanceConfigPanel.IsEnabled = _settings.AutoAdvanceEnabled;
+        AdvanceClickBox.Text = _settings.AdvanceClickPoint ?? "";
+        PostClickDelayBox.Text = _settings.PostClickDelaySeconds <= 0 ? "1.2" : _settings.PostClickDelaySeconds.ToString("0.###");
+        StuckThresholdBox.Text = _settings.StuckThreshold <= 0 ? "5" : _settings.StuckThreshold.ToString();
+        ChoiceDetectionCheck.IsChecked = _settings.ChoiceDetectionEnabled;
+        ChoiceConfigPanel.IsEnabled = _settings.ChoiceDetectionEnabled;
+        SelectCombo(ChoiceModeCombo, string.IsNullOrWhiteSpace(_settings.ChoiceHandleMode) ? "弹窗手动选择" : _settings.ChoiceHandleMode);
+        SelectCombo(ChoiceAutoRuleCombo, string.IsNullOrWhiteSpace(_settings.ChoiceAutoRule) ? "选择第一个" : _settings.ChoiceAutoRule);
+        ChoiceModeCombo_SelectionChanged(null!, null!); // sync auto-rule visibility
     }
 
     private void ReadUiIntoSettings()
@@ -275,6 +287,13 @@ public partial class MainWindow : Window
         _settings.OnlyAfterCount = ParseInt(OnlyAfterBox.Text, 200);
         _settings.AllowedNames = AllowedNamesBox.Text.Trim();
         _settings.ExampleCharFilter = ExampleCharFilterBox.Text.Trim();
+        _settings.AutoAdvanceEnabled = AutoAdvanceCheck.IsChecked == true;
+        _settings.AdvanceClickPoint = AdvanceClickBox.Text.Trim();
+        _settings.PostClickDelaySeconds = ParseDouble(PostClickDelayBox.Text, 1.2);
+        _settings.StuckThreshold = ParseInt(StuckThresholdBox.Text, 5);
+        _settings.ChoiceDetectionEnabled = ChoiceDetectionCheck.IsChecked == true;
+        _settings.ChoiceHandleMode = ComboText(ChoiceModeCombo);
+        _settings.ChoiceAutoRule = ComboText(ChoiceAutoRuleCombo);
     }
 
     private void ChooseScriptFile_Click(object sender, RoutedEventArgs e)
@@ -1001,8 +1020,39 @@ public partial class MainWindow : Window
         SaveSettings();
         LoadKnownRecordHashes();
         _captureTimer?.Stop();
+        _autoAdvance?.Stop();
+        _lastRecordedName = "";
+        _lastRecordedMessage = "";
 
         var intervalSec = ParseDouble(CaptureIntervalBox.Text, 1.2);
+        var source = ComboText(CaptureSourceCombo);
+        var isOcr = source is "Umi-OCR 本地识别" or "OpenAI-compatible Vision";
+
+        // Wire auto-advance if enabled and configured
+        if (AutoAdvanceCheck.IsChecked == true && !string.IsNullOrWhiteSpace(AdvanceClickBox.Text))
+        {
+            var parts = AdvanceClickBox.Text.Split(',');
+            if (parts.Length == 2 && int.TryParse(parts[0], out var clickX) && int.TryParse(parts[1], out var clickY))
+            {
+                _autoAdvance = new AutoAdvanceManager
+                {
+                    Enabled = true,
+                    ClickX = clickX,
+                    ClickY = clickY,
+                    PostClickDelayMs = (int)(ParseDouble(PostClickDelayBox.Text, 1.2) * 1000),
+                    StuckThreshold = ParseInt(StuckThresholdBox.Text, 5),
+                    CaptureIntervalMs = (int)(intervalSec * 1000),
+                    ChoiceMode = ComboText(ChoiceModeCombo).Contains("自动") ? "auto" : "manual",
+                    ChoiceAutoRule = ComboText(ChoiceAutoRuleCombo).Contains("最后一个") ? "last" : "first"
+                };
+                Log($"自动翻页: 位置({clickX},{clickY}) 翻页后等待{PostClickDelayBox.Text}s 卡死阈值{StuckThresholdBox.Text}次");
+            }
+        }
+        else
+        {
+            _autoAdvance = null;
+        }
+
         _captureTimer = new System.Windows.Threading.DispatcherTimer(
             TimeSpan.FromSeconds(intervalSec),
             System.Windows.Threading.DispatcherPriority.Normal,
@@ -1010,10 +1060,79 @@ public partial class MainWindow : Window
             {
                 try
                 {
+                    // Auto-advance: skip OCR during post-click wait
+                    if (_autoAdvance is { Enabled: true } && !_autoAdvance.ShouldCapture())
+                        return;
+
                     var entry = await CaptureRecordOnce();
-                    if (entry is not null) Log($"记录: {entry.Name}: {Truncate(entry.Message, 60)}");
+
+                    if (_autoAdvance is { Enabled: true })
+                    {
+                        if (entry is not null)
+                        {
+                            // === Fix: typewriter text detection ===
+                            // Same speaker + text grows by prefix match (≤15 chars) → still rendering
+                            var textGrowth = entry.Message.Length - _lastRecordedMessage.Length;
+                            if (entry.Name == _lastRecordedName
+                                && textGrowth is > 0 and <= 15
+                                && entry.Message.StartsWith(_lastRecordedMessage, StringComparison.Ordinal))
+                            {
+                                Log($"文字溢出: \"{Truncate(_lastRecordedMessage, 30)}\" → \"{Truncate(entry.Message, 30)}\" (等待完成)");
+                                _lastRecordedMessage = entry.Message;
+
+                                // Remove the fragment record we just wrote
+                                var records = LoadRecordEntries();
+                                if (records.Count > 0 && records[^1].Hash == entry.Hash)
+                                {
+                                    records.RemoveAt(records.Count - 1);
+                                    SaveRecordEntries(records);
+                                }
+                                return; // Don't advance — text still rendering
+                            }
+
+                            _lastRecordedName = entry.Name;
+                            _lastRecordedMessage = entry.Message;
+
+                            Log($"记录: {entry.Name}: {Truncate(entry.Message, 60)}");
+                            _autoAdvance.ResetStuck();
+                            ClickAtAdvancePoint();
+                        }
+                        else if (!string.IsNullOrWhiteSpace(_lastOcrText))
+                        {
+                            // === Fix: keep clicking even when no new text ===
+                            // OCR is getting the same text (game not advancing)
+                            _autoAdvance.StuckCount++;
+                            ClickAtAdvancePoint();
+                            Log($"自动翻页(重试): ({_autoAdvance.ClickX},{_autoAdvance.ClickY}) (stuck={_autoAdvance.StuckCount}/{_autoAdvance.StuckThreshold})");
+
+                            if (_autoAdvance.CurrentState == AutoAdvanceManager.State.Stuck)
+                            {
+                                Log("[翻页] 触发卡死检测...");
+                                if (ChoiceDetectionCheck.IsChecked == true)
+                                    await HandleChoiceBranch();
+                                else
+                                    _autoAdvance.ResetStuck();
+                            }
+                        }
+                        // _lastOcrText is empty → game transitioning → just wait
+                    }
+                    else
+                    {
+                        // Auto-advance disabled: log entry normally
+                        if (entry is not null)
+                            Log($"记录: {entry.Name}: {Truncate(entry.Message, 60)}");
+                    }
                 }
                 catch (Exception ex) { Log($"采集失败: {ex.Message}"); }
+
+                void ClickAtAdvancePoint()
+                {
+                    var hWnd = GameWindowInterop.FindWindowHandle(ProcessNameBox.Text.Trim());
+                    if (hWnd != IntPtr.Zero)
+                        GameWindowInterop.BringToForeground(hWnd);
+                    GameWindowInterop.ClickAt(_autoAdvance!.ClickX, _autoAdvance.ClickY);
+                    _autoAdvance.OnClickDispatched();
+                }
             },
             Dispatcher);
         _captureTimer.Start();
@@ -1024,7 +1143,203 @@ public partial class MainWindow : Window
     {
         _captureTimer?.Stop();
         _captureTimer = null;
+        _autoAdvance?.Stop();
+        _autoAdvance = null;
+        _lastRecordedName = "";
+        _lastRecordedMessage = "";
         Log("已停止实时记录。");
+    }
+
+    private void PickAdvancePoint_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new ClickPositionPickerWindow();
+        Hide();
+        try
+        {
+            if (picker.ShowDialog() == true && picker.PointSelected)
+                AdvanceClickBox.Text = $"{picker.SelectedX},{picker.SelectedY}";
+        }
+        finally
+        {
+            Show();
+            Activate();
+        }
+    }
+
+    private void AutoAdvance_Changed(object sender, RoutedEventArgs e)
+    {
+        AutoAdvanceConfigPanel.IsEnabled = AutoAdvanceCheck.IsChecked == true;
+    }
+
+    private void ChoiceDetection_Changed(object sender, RoutedEventArgs e)
+    {
+        ChoiceConfigPanel.IsEnabled = ChoiceDetectionCheck.IsChecked == true;
+    }
+
+    private void ChoiceModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ChoiceAutoConfig.Visibility = ComboText(ChoiceModeCombo).Contains("自动") ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async Task HandleChoiceBranch()
+    {
+        Log("[选择肢] 检测选择肢中...");
+
+        // Capture a wide area in lower portion of screen (where choices typically appear)
+        var screenW = (int)System.Windows.SystemParameters.PrimaryScreenWidth;
+        var screenH = (int)System.Windows.SystemParameters.PrimaryScreenHeight;
+        var wideRegion = new System.Drawing.Rectangle(
+            screenW / 6, screenH / 3,
+            screenW * 2 / 3, screenH * 2 / 3
+        );
+
+        var source = ComboText(CaptureSourceCombo);
+        var dpiScale = GetDpiScale();
+        var isUmi = source == "Umi-OCR 本地识别";
+
+        Bitmap? wideImage = null;
+        List<(int Index, string Text, int ClickX, int ClickY)> choices;
+
+        try
+        {
+            wideImage = CaptureRegion(wideRegion, dpiScale);
+
+            if (isUmi)
+            {
+                // Umi-OCR: use structured blocks with precise bounding box coordinates
+                var ocrBlocks = await OcrUmiBlocks(wideImage);
+                choices = ParseChoiceBlocks(ocrBlocks, wideRegion);
+            }
+            else
+            {
+                // Vision / Clipboard: text-only, fall back to linear estimation
+                var ocrText = await OcrImage(wideImage, source);
+                choices = ParseChoiceText(ocrText, wideRegion);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"[选择肢] OCR 失败: {ex.Message}");
+            _autoAdvance?.ResetStuck();
+            return;
+        }
+        finally { wideImage?.Dispose(); }
+
+        if (choices.Count < 2)
+        {
+            Log($"[选择肢] 未识别到选项（找到{choices.Count}个）");
+            _autoAdvance?.ResetStuck();
+            return;
+        }
+
+        Log($"[选择肢] 识别到 {choices.Count} 个选项: {string.Join(" | ", choices.Select(c => $"{c.Index + 1}.{c.Text}"))}");
+
+        var choiceMode = _autoAdvance?.ChoiceMode ?? "manual";
+        int selectedIndex;
+
+        if (choiceMode == "auto")
+        {
+            var rule = _autoAdvance?.ChoiceAutoRule ?? "first";
+            selectedIndex = rule == "last" ? choices.Count - 1 : 0;
+            Log($"[选择肢] 自动选择: 第{selectedIndex + 1}项 \"{choices[selectedIndex].Text}\"");
+        }
+        else
+        {
+            // Show modal choice popup
+            var result = await Dispatcher.InvokeAsync(() =>
+            {
+                var window = new ChoiceWindow(choices.Select(c => c.Text).ToList()) { Owner = this };
+                if (window.ShowDialog() == true && window.ChoiceMade)
+                {
+                    selectedIndex = window.SelectedIndex;
+                    Log($"[选择肢] 手动选择: 第{selectedIndex + 1}项 \"{choices[selectedIndex].Text}\"");
+                    return selectedIndex;
+                }
+                return -1;
+            });
+
+            if (result == -1)
+            {
+                Log("[选择肢] 用户跳过。");
+                _autoAdvance?.ResetStuck();
+                return;
+            }
+            selectedIndex = result;
+        }
+
+        // Click at precise coordinates
+        var chosen = choices[selectedIndex];
+        var hWnd = GameWindowInterop.FindWindowHandle(ProcessNameBox.Text.Trim());
+        if (hWnd != IntPtr.Zero)
+            GameWindowInterop.BringToForeground(hWnd);
+        await Task.Delay(100);
+        GameWindowInterop.ClickAt(chosen.ClickX, chosen.ClickY);
+        Log($"[选择肢] 点击选项 \"{chosen.Text}\" 位置 ({chosen.ClickX},{chosen.ClickY})");
+
+        _autoAdvance?.NotifyChoiceHandled();
+    }
+
+    /// <summary>
+    /// Parse choice blocks from structured Umi-OCR response.
+    /// Uses bounding box center for precise click coordinates.
+    /// </summary>
+    private static List<(int Index, string Text, int ClickX, int ClickY)> ParseChoiceBlocks(
+        List<OcrBlock> blocks, System.Drawing.Rectangle wideRegion)
+    {
+        var matched = new List<(string Text, int CenterX, int CenterY)>();
+
+        foreach (var block in blocks)
+        {
+            var match = Regex.Match(block.Text.Trim(), @"^\s*(?:\d+|[・\-•])\s*[\.\)、．]?\s*(.+)");
+            if (match.Success)
+            {
+                var text = match.Groups[1].Value.Trim().TrimEnd('　');
+                if (text.Length >= 2 && text.Length <= 80)
+                    matched.Add((text, block.CenterX, block.CenterY));
+            }
+        }
+
+        return matched
+            .Select((c, i) => (
+                Index: i,
+                c.Text,
+                ClickX: wideRegion.X + c.CenterX,
+                ClickY: wideRegion.Y + c.CenterY))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Parse choice text from Vision/Clipboard sources.
+    /// Falls back to linear position estimation.
+    /// </summary>
+    private static List<(int Index, string Text, int ClickX, int ClickY)> ParseChoiceText(
+        string ocrText, System.Drawing.Rectangle wideRegion)
+    {
+        if (string.IsNullOrWhiteSpace(ocrText)) return [];
+
+        var lines = ocrText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var choices = new List<string>();
+
+        foreach (var line in lines)
+        {
+            var match = Regex.Match(line.Trim(), @"^\s*(?:\d+|[・\-•])\s*[\.\)、．]?\s*(.+)");
+            if (match.Success)
+            {
+                var text = match.Groups[1].Value.Trim().TrimEnd('　');
+                if (text.Length >= 2 && text.Length <= 80)
+                    choices.Add(text);
+            }
+        }
+
+        return choices
+            .Select((text, i) =>
+            {
+                var optionHeight = (double)wideRegion.Height / Math.Max(1, choices.Count);
+                var clickY = wideRegion.Y + (int)(optionHeight * (i + 0.5));
+                var clickX = wideRegion.X + wideRegion.Width / 2;
+                return (Index: i, Text: text, ClickX: clickX, ClickY: clickY);
+            })
+            .ToList();
     }
 
     private string? _lastOcrText;
@@ -1146,55 +1461,71 @@ public partial class MainWindow : Window
 
     private async Task<string> OcrUmi(Bitmap image)
     {
+        var blocks = await OcrUmiBlocks(image);
+        return NormalizeText(string.Join("\n", blocks.Select(b => b.Text)));
+    }
+
+    private record OcrBlock(string Text, int CenterX, int CenterY);
+
+    /// <summary>
+    /// Call Umi-OCR and return structured blocks with text + bounding box center coordinates.
+    /// Coordinates are relative to the captured image (0,0 = top-left).
+    /// </summary>
+    private async Task<List<OcrBlock>> OcrUmiBlocks(Bitmap image)
+    {
         try
         {
             using var ms = new MemoryStream();
             image.Save(ms, ImageFormat.Png);
             var b64 = Convert.ToBase64String(ms.ToArray());
-            Log($"Umi-OCR 发送: {image.Width}x{image.Height} base64={b64.Length} 字节");
 
             var endpoint = UmiOcrEndpointBox.Text.Trim().TrimEnd('/');
             if (!endpoint.EndsWith("/api/ocr")) endpoint += "/api/ocr";
 
-            // Umi-OCR expects flat dot-notation keys in options, NOT nested objects
             var payload = JsonSerializer.Serialize(new Dictionary<string, object?>
             {
-                ["base64"] = b64,
-                ["options"] = new Dictionary<string, object?>
-                {
-                    ["data.format"] = "text"
-                }
+                ["base64"] = b64
+                // No data.format option — returns full structured data with box coordinates
             });
 
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
             var response = await client.PostAsync(endpoint, new StringContent(payload, Encoding.UTF8, "application/json"));
             var body = await response.Content.ReadAsStringAsync();
 
-            Log($"Umi-OCR API 返回: code={(int)response.StatusCode} body={Truncate(body, 200)}");
-
             var result = JsonNode.Parse(body);
             var code = result?["code"]?.GetValue<int>() ?? -1;
-            if (code == 100)
+            if (code != 100)
             {
-                var data = result?["data"];
-                if (data is JsonArray arr)
-                    return NormalizeText(string.Join("\n", arr
-                        .Select(e => e?["text"]?.GetValue<string>() ?? "")
-                        .Where(s => s.Length > 0)));
-                if (data is not null)
-                    try { return NormalizeText(data.GetValue<string>() ?? ""); } catch { }
-                Log($"Umi-OCR: 无法解析 data 字段 type={data?.GetType().Name ?? "null"}");
+                Log($"Umi-OCR 结构化失败: code={code}");
+                return [];
             }
-            else
+
+            var data = result?["data"];
+            if (data is not JsonArray arr) return [];
+
+            var blocks = new List<OcrBlock>();
+            foreach (var item in arr.OfType<JsonObject>())
             {
-                Log($"Umi-OCR 识别失败: code={code} msg={result?["data"]?.ToString() ?? "未知错误"}");
+                var text = item["text"]?.GetValue<string>() ?? "";
+                if (text.Length == 0) continue;
+
+                var box = item["box"] as JsonArray;
+                if (box is null || box.Count < 4) continue;
+
+                var allX = box.Select(p => p?[0]?.GetValue<int>() ?? 0).ToList();
+                var allY = box.Select(p => p?[1]?.GetValue<int>() ?? 0).ToList();
+                var centerX = (allX.Min() + allX.Max()) / 2;
+                var centerY = (allY.Min() + allY.Max()) / 2;
+
+                blocks.Add(new OcrBlock(text, centerX, centerY));
             }
+            return blocks;
         }
         catch (Exception ex)
         {
-            Log($"Umi-OCR 请求异常: {ex.Message}");
+            Log($"Umi-OCR 结构化请求异常: {ex.Message}");
+            return [];
         }
-        return "";
     }
 
     private void ShowProcessPicker_Click(object sender, RoutedEventArgs e)
@@ -1381,10 +1712,14 @@ public partial class MainWindow : Window
     private static bool IsQualityEvidence(ScriptEntry entry)
     {
         var msg = entry.Message;
-        if (msg.Length < 3) return false;
-        if (PureSoundPattern.IsMatch(msg)) return false;
-        var distinctChars = new HashSet<char>(msg.Where(c => !char.IsWhiteSpace(c) && c != '、' && c != '。'));
-        return distinctChars.Count >= 4;
+        if (string.IsNullOrWhiteSpace(msg)) return false;
+        // Only filter obvious H-scene gibberish: 3+ identical characters like "あああ", "啊啊啊"
+        if (msg.Length >= 3)
+        {
+            var first = msg[0];
+            if (msg.All(c => c == first || char.IsWhiteSpace(c))) return false;
+        }
+        return true;
     }
 
     private static readonly HashSet<string> HSceneKeywords = new(StringComparer.OrdinalIgnoreCase)
@@ -1715,6 +2050,15 @@ public sealed class AppSettings
     public string? AllowedNames { get; set; }
     public string? ExampleCharFilter { get; set; }
     public Dictionary<string, RegionMemory> ProcessRegions { get; set; } = [];
+
+    // Auto-Advance & Choice Detection
+    public bool AutoAdvanceEnabled { get; set; }
+    public string? AdvanceClickPoint { get; set; }
+    public double PostClickDelaySeconds { get; set; } = 1.2;
+    public int StuckThreshold { get; set; } = 5;
+    public bool ChoiceDetectionEnabled { get; set; }
+    public string? ChoiceHandleMode { get; set; } = "弹窗手动选择";
+    public string? ChoiceAutoRule { get; set; } = "第一个";
 }
 
 public class RegionMemory
