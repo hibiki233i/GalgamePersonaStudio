@@ -1,6 +1,7 @@
-# Galgame Persona Studio
+# Galgame Persona Studio - 让你的bot/agent更懂你的老婆！
 
-基于游戏脚本的 Galgame 角色人格提取。可自动从脚本 JSON 中提取高频角色、分析台词特征并生成角色卡。
+
+基于游戏脚本的 Galgame 角色人格提取。可自动从脚本 JSON 中提取高频角色、分析台词特征并生成角色卡，解决直接询问LLM角色人格回答过于单薄/冷门角色没有数据。
 
 ## 主要特性
 
