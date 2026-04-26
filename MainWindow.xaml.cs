@@ -33,7 +33,9 @@ public partial class MainWindow : Window
     private const string DefaultEmbeddingModel = "mxbai-embed-large";
     private const string DefaultVisionEndpoint = "https://api.openai.com/v1/chat/completions";
     private const string DefaultVisionModel = "gpt-4o-mini";
-    private const string AppVersion = "2026-04-26.3";
+    private const string AppVersion = "1.0.0";
+    private const string RepoOwner = "hibiki233i";
+    private const string RepoName = "GalgamePersonaStudio";
 
     private static readonly Regex PureSoundPattern = new(@"^[぀-ヿ　-〿\s!?！？、。…～〜ー\-,]+$", RegexOptions.Compiled);
     private static readonly Regex TokenRegex = new(@"[\u3040-\u30ff\u3400-\u9fffA-Za-z0-9ー]{2,}", RegexOptions.Compiled);
@@ -102,7 +104,8 @@ public partial class MainWindow : Window
         UpdateCaptureVisibility();
         HookAutosave();
         _isLoadingSettings = false;
-        Log($"WPF UI 版本已启动。build={AppVersion}");
+        Log($"Galgame Persona Studio v{AppVersion}");
+        _ = CheckForUpdateAsync();
     }
 
     private static string CacheDir()
@@ -216,6 +219,7 @@ public partial class MainWindow : Window
             RagPresetList.SelectedItems.Add(label);
         }
         RagCustomBox.Text = _settings.RagCustomDirections ?? "";
+        VersionText.Text = $"v{AppVersion}";
 
         ProcessNameBox.Text = string.IsNullOrWhiteSpace(_settings.LastProcessName) ? "unknown" : _settings.LastProcessName;
         WindowTitleBox.Text = _settings.LastWindowTitle ?? "";
@@ -847,6 +851,35 @@ public partial class MainWindow : Window
         ## 台词证据
         {{evidenceText}}
         """;
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            client.DefaultRequestHeaders.UserAgent.TryParseAdd("GalgamePersonaStudio");
+            var json = await client.GetStringAsync($"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest");
+            var release = JsonNode.Parse(json);
+            var tag = release?["tag_name"]?.GetValue<string>() ?? "";
+            var latestVer = tag.TrimStart('v');
+            if (latestVer.Length == 0) return;
+
+            if (Version.TryParse(latestVer, out var latest) && Version.TryParse(AppVersion, out var current) && latest > current)
+            {
+                var url = release?["html_url"]?.GetValue<string>() ?? "";
+                var body = release?["body"]?.GetValue<string>() ?? "";
+                Dispatcher.Invoke(() =>
+                {
+                    var msg = $"发现新版本 v{latestVer}（当前 v{AppVersion}）\n\n更新内容：\n{Truncate(body, 500)}\n\n是否前往 Releases 页面下载？";
+                    if (System.Windows.MessageBox.Show(msg, "发现更新", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
+                    {
+                        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                    }
+                });
+            }
+        }
+        catch { Log("[更新] 检查新版本失败（网络或 GitHub API 限制）"); }
     }
 
     private async Task<string> CallChatCompletion(string endpoint, string model, string apiKey, string prompt)

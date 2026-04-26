@@ -273,9 +273,10 @@
                     </Grid.RowDefinitions>
 
                     <!-- App Title -->
-                    <StackPanel Margin="20,18,44,16">
+                    <StackPanel Margin="20,18,44,8">
                         <TextBlock Text="Galgame Persona Studio" FontSize="18" FontWeight="SemiBold" Foreground="#E2E8F0"/>
                         <TextBlock Text="角色人格提取工作台" FontSize="12" Foreground="#94A3B8" Margin="0,4,0,0"/>
+                        <TextBlock x:Name="VersionText" Text="v1.0.0" FontSize="11" Foreground="#64748B" Margin="0,6,0,0"/>
                     </StackPanel>
 
                     <!-- Navigation -->
