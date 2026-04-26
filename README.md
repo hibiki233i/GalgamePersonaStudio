@@ -30,7 +30,7 @@
 
 ## 用法
 
-1. 获得脚本json文件，可通过实时记录功能或解包获得，json文件格式兼容[GalTransl](https://github.com/XDkkk/GalTransl)。（注：解包相关内容可参照 [GalTransl](https://github.com/XDkkk/GalTransl) 中对应部分）
+1. 获得脚本json文件，可通过实时记录功能或解包获得，json文件格式兼容[GalTransl](https://github.com/GalTransl/GalTransl)。（注：解包相关内容可参照 [GalTransl](https://github.com/GalTransl/GalTransl) 中对应部分）
 2. 在「角色管理」面板选择剧本目录，扫描并筛选角色
 3. 在「人格生成」面板配置 LLM / Embedding 参数（可选）
 4. 在 RAG 面板选择检索方向
