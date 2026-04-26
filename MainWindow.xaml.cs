@@ -33,7 +33,7 @@ public partial class MainWindow : Window
     private const string DefaultEmbeddingModel = "mxbai-embed-large";
     private const string DefaultVisionEndpoint = "https://api.openai.com/v1/chat/completions";
     private const string DefaultVisionModel = "gpt-4o-mini";
-    private const string AppVersion = "1.0.0";
+    private const string AppVersion = "1.0.1";
     private const string RepoOwner = "hibiki233i";
     private const string RepoName = "GalgamePersonaStudio";
 
@@ -797,12 +797,13 @@ public partial class MainWindow : Window
 
         ============================================================
         ### persona_prompt（核心人格提示词）
-        {{gamePrefixInstruction}}请按以下固定结构撰写，每个小节使用 bullet points 而非段落：
-        - **核心人格**：2-4 条这个角色的核心性格特质，每句话概括一个特质（如"表面端正、内里敏感，非常在意自己是否足够坦率"）
-        - **日常谈吐特征**：典型语气（如短促/平稳/俏皮）、句式节奏（如带停顿和修正、先缓冲再判断）、常用词/口癖、对熟人和陌生人的态度差异、是否擅长吐槽或分析
+        {{gamePrefixInstruction}}请按以下固定结构撰写，每个小节用 2-5 条 bullet point 概括：
+        - **核心人格**：2-4 条核心性格特质，每句话精准概括一个特征（如"表面端正、内里敏感，非常在意自己是否足够坦率"）
+        - **日常谈吐**：一句话概括整体语气风格，再列出口癖、高频词、句式偏好（短句还是长句、是否带停顿修正）、对熟人和陌生人的语气差异
+        - **表达 DNA**：分三块——(1) 口癖/高频词，(2) 句式节奏（如先缓冲再判断、短句停顿式、带自我修正），(3) 语气转换（被夸时、害羞时、吐槽时的语气分别在证据中的具体表现）
         - **情感模式**：对亲近和陌生对象分别的表现、害羞时的典型反应、冲突时的应对方式、被误解/被夸奖时的状态{{(_settings.FilterHScene ? "" : "、亲密情境中的语气变化和行为倾向")}}
-        - **边界与禁忌**：不应编造的背景设定、不应表现出的行为模式（如"不能让她无缘无故说教或突然变主动"）、证据不足时的回应策略
-        - **萌点概括**：一句话总结最有魅力的特征（如"端庄大小姐被撩就慌的反差萌"）
+        - **边界与禁忌**：不应编造的背景设定、不应表现出的行为模式（如"不能让她无缘无故说教或突然变主动"）
+        - **萌点概括**：一句话总结最有魅力的反差或特征（如"端庄大小姐被撩就慌的反差萌"）
         整个 prompt 控制在 800-1200 字，直接可用于角色扮演系统。
 
         ============================================================
@@ -857,8 +858,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             client.DefaultRequestHeaders.UserAgent.TryParseAdd("GalgamePersonaStudio");
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
             var json = await client.GetStringAsync($"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest");
             var release = JsonNode.Parse(json);
             var tag = release?["tag_name"]?.GetValue<string>() ?? "";
@@ -878,8 +880,39 @@ public partial class MainWindow : Window
                     }
                 });
             }
+            else
+            {
+                Log($"[更新] 当前已是最新版本（v{AppVersion}）");
+            }
         }
-        catch { Log("[更新] 检查新版本失败（网络或 GitHub API 限制）"); }
+        catch (HttpRequestException ex) when (ex.StatusCode.HasValue && ex.StatusCode.Value == System.Net.HttpStatusCode.Forbidden)
+        {
+            Log($"[更新] GitHub API 速率受限（HTTP 403），可设置 Token 提升限制或稍后再试。");
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode.HasValue && ex.StatusCode.Value == System.Net.HttpStatusCode.NotFound)
+        {
+            Log($"[更新] 未找到正式 Release（404），请先在 GitHub 创建 Release。");
+        }
+        catch (TaskCanceledException)
+        {
+            Log($"[更新] 检查超时，GitHub API 可能无法访问（网络问题或需要代理）。");
+        }
+        catch (Exception ex)
+        {
+            Log($"[更新] 检查失败: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void VersionText_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo($"https://github.com/{RepoOwner}/{RepoName}") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log($"打开项目主页失败: {ex.Message}");
+        }
     }
 
     private async Task<string> CallChatCompletion(string endpoint, string model, string apiKey, string prompt)
