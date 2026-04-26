@@ -1,0 +1,30 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+*.csproj.user
+
+## VS
+.vs/
+*.sln.ide/
+
+## logs
+log/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Build artifacts
+*.exe
+*.pdb
+*.dll
+!bin/*/publish/*
+
+## IDE
+.idea/
+.claude/
+*.swp
+*.swo
