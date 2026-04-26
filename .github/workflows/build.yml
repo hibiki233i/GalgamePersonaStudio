@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
 
@@ -30,3 +31,37 @@ jobs:
         name: GalgamePersonaStudio
         path: bin/Release/net8.0-windows/
         compression-level: 9
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET 8
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Restore
+      run: dotnet restore
+
+    - name: Publish (单文件)
+      run: |
+        dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+
+    - name: Create ZIP
+      run: |
+        Compress-Archive -Path publish/* -DestinationPath GalgamePersonaStudio-${{ github.ref_name }}.zip
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Galgame Persona Studio ${{ github.ref_name }}
+        generate_release_notes: true
+        draft: false
+        prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') }}
+        files: GalgamePersonaStudio-${{ github.ref_name }}.zip
+        fail_on_unmatched_files: true
