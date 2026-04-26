@@ -1,6 +1,6 @@
 # Galgame Persona Studio
 
-基于台词证据的 Galgame 角色人格提取工作台。配合 [GalTransl](https://github.com/XDkkk/GalTransl) 解包脚本使用，可自动从剧本 JSON 中提取高频角色、分析台词特征并生成角色卡。
+基于游戏脚本的 Galgame 角色人格提取。可自动从脚本 JSON 中提取高频角色、分析台词特征并生成角色卡。
 
 ## 主要特性
 
@@ -13,15 +13,15 @@
 - 支持 OpenAI-compatible Embedding API / 本地哈希嵌入
 
 ### LLM 增强
-支持接入任意 OpenAI-compatible API（Ollama / OpenAI / 兼容端），基于证据自动生成：
+支持接入任意 OpenAI-compatible API（Ollama / OpenAI / 兼容端），基于脚本自动生成：
 - **persona_prompt**：可直接用于 AI 角色扮演的核心人格提示词
 - **traits**：人格特质列表（含台词证据引用）
 - **dialogue_pairs**：预设对话示例（覆盖多种场景）
 - **example_exchanges**：代表性原作对话片段
 - **error_reply**：证据不足时的婉拒回复
 
-### 实时记录（OCR）
-- **Clipboard 模式**：监听剪贴板，配合 LunaTranslator 等外部工具抓取译文
+### 实时记录（推荐使用[Umi-OCR](https://github.com/hiroi-sora/Umi-OCR)）
+- **Clipboard 模式**：监听剪贴板，配合外部工具抓取译文
 - **Vision 模式**：调用 OpenAI-compatible Vision API 截图识别对话区域
 - **Umi-OCR 模式**：调用本地 [Umi-OCR](https://github.com/hiroi-sora/Umi-OCR) 进行离线文字识别
 - 支持框选对话区域和人名区域，按进程记忆区域配置
@@ -29,7 +29,7 @@
 
 ## 用法
 
-1. 使用 GalTransl 解包游戏剧本，输出 JSON 格式文件
+1. 获得脚本json文件，可通过实时记录功能或解包获得，json文件格式兼容[GalTransl](https://github.com/XDkkk/GalTransl)。（注：解包相关内容可参照 [GalTransl](https://github.com/XDkkk/GalTransl) 中对应部分）
 2. 在「角色管理」面板选择剧本目录，扫描并筛选角色
 3. 在「人格生成」面板配置 LLM / Embedding 参数（可选）
 4. 在 RAG 面板选择检索方向
@@ -68,7 +68,6 @@ GalgamePersonaStudio/
 
 ## TODO
 
-- [ ] **连点器功能**：与 OCR 结合，按设定间隔自动点击游戏窗口指定位置，实现对话文本的自动化提取
-- [ ] 多屏/高 DPI 适配优化
+- [ ] 连点器功能：与 OCR 结合，按设定间隔自动点击游戏窗口指定位置，实现对话文本的自动化提取
 - [ ] 更多 Embedding 后端支持
 - [ ] 批量角色人格生成
