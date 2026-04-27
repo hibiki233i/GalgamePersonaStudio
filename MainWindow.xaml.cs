@@ -403,34 +403,43 @@ public partial class MainWindow : Window
 
     private async Task GenerateForCharacter(string character)
     {
+        // Snapshot all UI settings BEFORE any await to prevent mid-generation inconsistency
         var charEntries = Dedup(_entries.Where(x => x.Name == character)).ToList();
         var maxEvidence = ParseInt(MaxEvidenceBox.Text, 180);
         var evidenceLimit = RagEnabledCheck.IsChecked == true ? ParseInt(RagTopKBox.Text, 40) : maxEvidence;
         var embeddingMode = ComboText(EmbeddingModeCombo);
-        Log($"{character}: 开始生成，角色去重台词 {charEntries.Count} 条，LLM={ComboText(ProviderCombo)}，Embedding={embeddingMode}。");
-        if (RagEnabledCheck.IsChecked == true && embeddingMode == "不使用嵌入")
+        var isRag = RagEnabledCheck.IsChecked == true;
+        var ragDirections = SelectedRagDirections();
+        var provider = ComboText(ProviderCombo);
+        var useLlm = provider != "本地规则";
+        var endpoint = provider.StartsWith("Ollama") ? EndpointBox.Text.Trim() : EndpointBox.Text.Trim();
+        var model = string.IsNullOrWhiteSpace(ModelBox.Text) ? DefaultChatModel : ModelBox.Text.Trim();
+        var apiKey = ApiKeyBox.Password;
+        var outputDir = OutputPathBox.Text.Trim();
+
+        Log($"{character}: 开始生成，角色去重台词 {charEntries.Count} 条，LLM={provider}，Embedding={embeddingMode}。");
+        if (isRag && embeddingMode == "不使用嵌入")
         {
             embeddingMode = "本地哈希嵌入";
             Log("RAG 需要嵌入前置，本次自动使用本地哈希嵌入。");
         }
 
-        EvidenceResult evidence = RagEnabledCheck.IsChecked == true
-            ? await SelectRagEvidence(charEntries, SelectedRagDirections(), evidenceLimit, embeddingMode)
+        EvidenceResult evidence = isRag
+            ? await SelectRagEvidence(charEntries, ragDirections, evidenceLimit, embeddingMode)
             : await SelectEvidence(charEntries, evidenceLimit, embeddingMode);
         Log($"{character}: 证据选择完成，方式={evidence.Metadata.GetValueOrDefault("evidence_selection")}，证据 {evidence.Entries.Count} 条。");
 
-        var persona = BuildLocalPersona(character, charEntries, evidence);
-        if (ComboText(ProviderCombo) != "本地规则")
+        var worldContext = await ExtractWorldContextLinesAsync(embeddingMode, character);
+        var persona = BuildLocalPersona(character, charEntries, evidence, worldContext);
+        if (useLlm)
         {
-            var endpoint = ComboText(ProviderCombo).StartsWith("Ollama") ? EndpointBox.Text.Trim() : EndpointBox.Text.Trim();
-            var model = string.IsNullOrWhiteSpace(ModelBox.Text) ? DefaultChatModel : ModelBox.Text.Trim();
-            var prompt = BuildLlmPrompt(character, evidence, persona);
+            var prompt = BuildLlmPrompt(character, evidence, persona, worldContext);
             Log($"{character}: 调用 LLM，endpoint={endpoint}，model={model}，prompt 字符数={prompt.Length}。");
-            var promptFile = Path.Combine(OutputPathBox.Text.Trim(), SafeName(character), "llm_prompt.txt");
+            var promptFile = Path.Combine(outputDir, SafeName(character), "llm_prompt.txt");
             Directory.CreateDirectory(Path.GetDirectoryName(promptFile)!);
             File.WriteAllText(promptFile, prompt, Encoding.UTF8);
             Log($"{character}: 已保存完整提示词到 llm_prompt.txt。提示词预览:\n{Truncate(prompt, 600)}");
-            var raw = await CallChatCompletion(endpoint, model, ApiKeyBox.Password, prompt);
+            var raw = await CallChatCompletion(endpoint, model, apiKey, prompt);
             Log($"{character}: LLM 返回 {raw.Length} 字符，开始解析 JSON。");
             var merged = TryParseObject(raw);
             if (merged is not null)
@@ -480,10 +489,13 @@ public partial class MainWindow : Window
         var filtered = charEntries.Count - qualityEntries.Count;
         if (filtered > 0) Log($"RAG: 过滤低质量台词 {filtered} 条（纯拟声/过短），保留 {qualityEntries.Count} 条。");
         var hsceneFiltered = 0;
-        var beforeH = qualityEntries.Count;
-        qualityEntries = qualityEntries.Where(x => !IsHSceneContent(x)).ToList();
-        hsceneFiltered = beforeH - qualityEntries.Count;
-        if (hsceneFiltered > 0) Log($"RAG: 过滤 H-scene 台词 {hsceneFiltered} 条，保留 {qualityEntries.Count} 条。");
+        if (_settings.FilterHScene)
+        {
+            var beforeH = qualityEntries.Count;
+            qualityEntries = qualityEntries.Where(x => !IsHSceneContent(x)).ToList();
+            hsceneFiltered = beforeH - qualityEntries.Count;
+            if (hsceneFiltered > 0) Log($"RAG: 过滤 H-scene 台词 {hsceneFiltered} 条，保留 {qualityEntries.Count} 条。");
+        }
         var candidates = EvenlySpaced(qualityEntries, ParseInt(EmbeddingCandidateBox.Text, 800));
         var contexts = candidates.Select(BuildContextBlock).ToList();
         var queries = directions.Select(x => "galgame角色人格证据检索方向：" + x).ToList();
@@ -569,11 +581,28 @@ public partial class MainWindow : Window
             {
                 throw LogAndCreateSdkException("Embedding", ex);
             }
+            catch (HttpRequestException ex)
+            {
+                Log($"Embedding 网络错误: {ex.Message}");
+                throw;
+            }
+            catch (TaskCanceledException)
+            {
+                Log("Embedding 请求超时");
+                throw;
+            }
+        }
+
+        if (all.Count != texts.Count)
+        {
+            var msg = $"Embedding 返回数量不匹配: 请求{texts.Count}条，返回{all.Count}条";
+            Log(msg);
+            throw new InvalidOperationException(msg);
         }
         return all;
     }
 
-    private JsonObject BuildLocalPersona(string character, List<ScriptEntry> charEntries, EvidenceResult evidence)
+    private JsonObject BuildLocalPersona(string character, List<ScriptEntry> charEntries, EvidenceResult evidence, List<string> worldContext)
     {
         var entries = evidence.Entries.Count > 0 ? evidence.Entries : charEntries;
         var messages = entries.Select(x => x.Message).ToList();
@@ -630,10 +659,93 @@ public partial class MainWindow : Window
             ["dialogue_pairs"] = JsonSerializer.SerializeToNode(BuildDialoguePairs(character), JsonOptions()),
             ["example_exchanges"] = JsonSerializer.SerializeToNode(exampleExchanges, JsonOptions()),
             ["error_reply"] = $"{character}：唔…现在有点没法好好回应你。下次再说吧。",
+            ["world_context"] = JsonSerializer.SerializeToNode(worldContext.Take(15).ToList(), JsonOptions()),
             ["evidence_metadata"] = JsonSerializer.SerializeToNode(evidence.Metadata, JsonOptions()),
             ["evidence"] = JsonSerializer.SerializeToNode(evidence.Entries.Select(ToOutputEntry), JsonOptions())
         };
     }
+
+    /// <summary>
+    /// Extract world-building / narration lines from the full script.
+    /// These provide game setting context for character analysis.
+    /// </summary>
+    /// <summary>
+    /// Extract world-building / narration lines from the full script.
+    /// Uses RAG retrieval (with character-specific directions) if embedding is available,
+    /// falls back to even sampling otherwise.
+    /// </summary>
+    private async Task<List<string>> ExtractWorldContextLinesAsync(string embeddingMode, string character)
+    {
+        var narratorNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "", "旁白", "叙述", "narrator", "narration", "描述"
+        };
+
+        var narratorLines = _entries
+            .Where(e => narratorNames.Contains(e.Name.Trim())
+                         && e.Message.Length >= 20
+                         && !PureDialoguePattern.IsMatch(e.Message)
+                         && !e.Message.All(c => c == e.Message[0]))
+            .Select(e => e.Message)
+            .Distinct()
+            .ToList();
+
+        if (narratorLines.Count == 0) return [];
+
+        // RAG retrieval if embedding is enabled
+        if (embeddingMode != "不使用嵌入" && narratorLines.Count > 10)
+        {
+            try
+            {
+                var directions = new List<string>
+                {
+                    "galgame世界观背景：故事发生的时代、地点、社会结构、超自然元素",
+                    "galgame剧情核心：" + character + "相关的关键事件、势力冲突、历史",
+                    "galgame社会关系：" + character + "的社会地位、所属组织、人际关系网"
+                };
+
+                var withIdx = narratorLines
+                    .Select((text, idx) => (text, idx, truncated: text.Length > 200 ? text[..200] : text))
+                    .ToList();
+
+                var allTexts = directions.Concat(withIdx.Select(x => x.truncated)).ToList();
+                var vectors = await EmbedTexts(allTexts, embeddingMode);
+
+                var queryVecs = vectors.Take(directions.Count).ToList();
+                var ctxVecs = vectors.Skip(directions.Count).ToList();
+
+                var scored = new List<(int Idx, double Score)>();
+                foreach (var qv in queryVecs)
+                {
+                    scored.AddRange(ctxVecs.Select((cv, i) => (withIdx[i].idx, Cosine(qv, cv))));
+                }
+
+                var result = scored
+                    .GroupBy(x => x.Idx)
+                    .Select(g => (Idx: g.Key, Score: g.Average(x => x.Score)))
+                    .OrderByDescending(x => x.Score)
+                    .Take(15)
+                    .Select(x => narratorLines[x.Idx])
+                    .ToList();
+
+                Log($"[世界观] RAG 检索完成: {narratorLines.Count}条→{result.Count}条 (embedding={embeddingMode})");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Log($"[世界观] RAG 检索失败: {ex.Message}，回退均匀采样。");
+            }
+        }
+
+        // Fallback: even sampling for diversity
+        Log($"[世界观] 均匀采样: {narratorLines.Count}条旁白");
+        if (narratorLines.Count <= 30) return narratorLines;
+        return Enumerable.Range(0, 30)
+            .Select(i => narratorLines[(int)Math.Round(i * (narratorLines.Count - 1) / 29.0)])
+            .ToList();
+    }
+
+    private static readonly Regex PureDialoguePattern = new(@"^[「『""].*[」』""]$|^[\p{P}\s]+$", RegexOptions.Compiled);
 
     private static string BuildRichPersonaPrompt(string character, JsonArray traits)
     {
@@ -782,7 +894,7 @@ public partial class MainWindow : Window
             or "あげる" or "できる" or "わかる" or "思う" or "言う" or "考える";
     }
 
-    private string BuildLlmPrompt(string character, EvidenceResult evidence, JsonObject persona)
+    private string BuildLlmPrompt(string character, EvidenceResult evidence, JsonObject persona, List<string> worldContext)
     {
         var gameName = DetectGameName(_entries);
         var gamePrefixInstruction = string.IsNullOrWhiteSpace(gameName)
@@ -791,6 +903,14 @@ public partial class MainWindow : Window
         var evidenceText = ragBlocks is { Count: > 0 }
             ? string.Join("\n\n---\n\n", ragBlocks.Select(x => x["context"]?.ToString() ?? ""))
             : string.Join("\n", evidence.Entries.Select(x => "- " + x.Message));
+        var worldSection = worldContext.Count > 0 ? $$"""
+
+        ## 世界観背景（来自剧本原文）
+        以下是从剧本中提取的叙述性/描述性文本，帮助你了解角色所处的世界背景：
+        {{string.Join("\n", worldContext.Select(x => "- " + x))}}
+
+        人格分析时适当参考这些世界观信息，确保角色设定与剧本世界一致。
+        """ : "";
 
         var intimateSection = !_settings.FilterHScene ? $$"""
 
@@ -813,6 +933,7 @@ public partial class MainWindow : Window
         ## 输出要求
         输出严格 JSON 对象，必须包含以下字段且遵循每字段的格式约束：
         { "persona_prompt": string, "traits": array, "dialogue_pairs": array, "example_exchanges": array, "error_reply": string }
+        {{worldSection}}
 
         ============================================================
         ### persona_prompt（核心人格提示词）
