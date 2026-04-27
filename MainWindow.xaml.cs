@@ -33,7 +33,7 @@ public partial class MainWindow : Window
     private const string DefaultEmbeddingModel = "text-embedding-3-large";
     private const string DefaultVisionEndpoint = "https://api.openai.com/v1/chat/completions";
     private const string DefaultVisionModel = "gpt-4o-mini";
-    private const string AppVersion = "1.0.1";
+    private const string AppVersion = "1.1.0";
     private const string RepoOwner = "hibiki233i";
     private const string RepoName = "GalgamePersonaStudio";
 
