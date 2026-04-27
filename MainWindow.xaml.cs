@@ -33,7 +33,7 @@ public partial class MainWindow : Window
     private const string DefaultEmbeddingModel = "text-embedding-3-large";
     private const string DefaultVisionEndpoint = "https://api.openai.com/v1/chat/completions";
     private const string DefaultVisionModel = "gpt-4o-mini";
-    private const string AppVersion = "1.1.1";
+    private const string AppVersion = "1.1.2";
     private const string RepoOwner = "hibiki233i";
     private const string RepoName = "GalgamePersonaStudio";
 
@@ -1173,7 +1173,7 @@ public partial class MainWindow : Window
 
         ============================================================
         ### world_summary（世界观总结）
-        基于上方提供の ## 世界観背景 中的剧本原文，总结该角色所处世界的核心设定。输出 4-8 句话的连贯段落（150-400 字），覆盖：
+        基于上方提供的 ## 世界観背景 中的剧本原文，总结该角色所处世界的核心设定。输出 4-8 句话的连贯段落（150-400 字），覆盖：
         - 时代与地点：故事发生的时代背景与主要场景
         - 社会结构：关键势力、组织、社会阶层、权力关系
         - 超自然/特殊设定：魔法、科技、异能等非常规元素（如原文无则写"无明显超自然设定"）
