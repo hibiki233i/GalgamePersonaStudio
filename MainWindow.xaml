@@ -474,14 +474,6 @@
                         </Grid>
                     </Border>
 
-                    <!-- Example Filter Card -->
-                    <Border Style="{StaticResource PanelBorder}">
-                        <StackPanel>
-                            <TextBlock Text="优先选取与以下角色互动的实例对话（逗号分隔，不加则按代表性自动排序）" Style="{StaticResource SectionSubtitle}"/>
-                            <TextBox x:Name="ExampleCharFilterBox" Margin="0,6,0,0"/>
-                        </StackPanel>
-                    </Border>
-
                     <Button Content="生成人格文件" HorizontalAlignment="Right" Style="{StaticResource AccentButton}" Click="GeneratePersona_Click" Margin="0,4,0,0"/>
                 </StackPanel>
 
@@ -516,6 +508,14 @@
                             <TextBlock Text="高频人物（可多选）" FontSize="14" FontWeight="SemiBold" Margin="0,20,0,8" Foreground="#1A202C"/>
                             <ListBox x:Name="CharacterList" SelectionMode="Multiple" MinHeight="360" MaxHeight="520"
                                      Background="#F8FAFC" BorderBrush="#CBD5E1" BorderThickness="1"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Example Filter Card -->
+                    <Border Style="{StaticResource PanelBorder}">
+                        <StackPanel>
+                            <TextBlock Text="实例对话角色筛选（逗号分隔，仅在生成人格时优先选取与以下角色互动的对话）" Style="{StaticResource SectionSubtitle}"/>
+                            <TextBox x:Name="ExampleCharFilterBox" Margin="0,6,0,0"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -653,7 +653,7 @@
                     <!-- Auto-Advance Card -->
                     <Border x:Name="AutoAdvancePanel" Style="{StaticResource PanelBorder}">
                         <StackPanel>
-                            <CheckBox x:Name="AutoAdvanceCheck" Content="启用自动翻页" Checked="AutoAdvance_Changed" Unchecked="AutoAdvance_Changed"/>
+                            <CheckBox x:Name="AutoAdvanceCheck" Content="启用自动翻页（beta）" Checked="AutoAdvance_Changed" Unchecked="AutoAdvance_Changed"/>
                             <StackPanel x:Name="AutoAdvanceConfigPanel" Margin="0,8,0,0">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -696,6 +696,16 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
+                                    <TextBlock Text="选择肢区域:" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="ChoiceRegionBox" Grid.Column="1" Margin="8,0"/>
+                                    <Button Grid.Column="2" Content="框选" Click="PickChoiceRegion_Click" Style="{StaticResource SecondaryButton}" FontSize="11" Padding="8,4"/>
+                                </Grid>
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
                                     <TextBlock Text="选择肢处理:" VerticalAlignment="Center"/>
                                     <ComboBox x:Name="ChoiceModeCombo" SelectionChanged="ChoiceModeCombo_SelectionChanged" Grid.Column="1" Margin="8,0" Style="{StaticResource ModernComboBox}" ItemContainerStyle="{StaticResource ModernComboBoxItem}">
                                         <ComboBoxItem Content="弹窗手动选择"/>
@@ -717,6 +727,32 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- Hotkey Card -->
+                    <Border Style="{StaticResource PanelBorder}">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="开始记录快捷键:" VerticalAlignment="Center"/>
+                                <TextBox x:Name="StartHotkeyBox" Grid.Column="1" Margin="8,0" IsReadOnly="True"/>
+                                <Button x:Name="SetStartHotkeyBtn" Grid.Column="2" Content="设置" Click="SetStartHotkey_Click" Style="{StaticResource SecondaryButton}" Padding="12,4"/>
+                            </Grid>
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="停止记录快捷键:" VerticalAlignment="Center"/>
+                                <TextBox x:Name="StopHotkeyBox" Grid.Column="1" Margin="8,0" IsReadOnly="True"/>
+                                <Button x:Name="SetStopHotkeyBtn" Grid.Column="2" Content="设置" Click="SetStopHotkey_Click" Style="{StaticResource SecondaryButton}" Padding="12,4"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
                     <Border Style="{StaticResource PanelBorder}">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -735,8 +771,8 @@
                             <StackPanel Grid.Column="1" Margin="12,20,0,0">
                                 <Button Content="选择目录" Click="ChooseRecordOutput_Click" Style="{StaticResource SecondaryButton}"/>
                                 <Button Content="测试一次" Click="CaptureOnce_Click" Style="{StaticResource SecondaryButton}" Margin="0,6,0,0"/>
-                                <Button Content="开始记录" FontWeight="SemiBold" Click="StartCapture_Click" Style="{StaticResource AccentButton}" Margin="0,6,0,0"/>
-                                <Button Content="停止" Click="StopCapture_Click" Style="{StaticResource SecondaryButton}" Margin="0,6,0,0"/>
+                                <Button x:Name="StartCaptureBtn" Content="开始记录" FontWeight="SemiBold" Click="StartCapture_Click" Style="{StaticResource AccentButton}" Margin="0,6,0,0"/>
+                                <Button x:Name="StopCaptureBtn" Content="停止" Click="StopCapture_Click" Style="{StaticResource SecondaryButton}" Margin="0,6,0,0"/>
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -759,5 +795,16 @@
                 </StackPanel>
             </Grid>
         </ScrollViewer>
+
+        <!-- Toast Notification -->
+        <Border x:Name="ToastBorder" Grid.ColumnSpan="2"
+                HorizontalAlignment="Center" VerticalAlignment="Top"
+                Margin="0,16,0,0" Padding="20,12"
+                CornerRadius="8" BorderThickness="1"
+                Opacity="0" Visibility="Collapsed"
+                IsHitTestVisible="False">
+            <TextBlock x:Name="ToastText" FontSize="14" FontWeight="SemiBold"
+                       TextWrapping="Wrap" MaxWidth="480" TextAlignment="Center"/>
+        </Border>
     </Grid>
 </Window>

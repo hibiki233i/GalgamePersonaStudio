@@ -13,7 +13,7 @@ public class AutoAdvanceManager
     private int _postClickSkipCount;
 
     public enum State { Idle, Active, Stuck }
-    public State CurrentState { get; private set; } = State.Idle;
+    public State CurrentState { get; set; } = State.Idle;
 
     public bool Enabled { get; set; }
     public int ClickX { get; set; }

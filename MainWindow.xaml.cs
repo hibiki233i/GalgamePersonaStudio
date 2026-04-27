@@ -55,6 +55,13 @@ public partial class MainWindow : Window
     private AutoAdvanceManager? _autoAdvance;
     private string _lastRecordedName = "";
     private string _lastRecordedMessage = "";
+    private int _emptyOcrCount;
+    private System.Windows.Interop.HwndSource? _hotkeyHwndSource;
+    private bool _capturingHotkey;
+    private string? _capturingHotkeyTarget;
+
+    private const int HotkeyStartRecordId = 10;
+    private const int HotkeyStopRecordId = 11;
 
     private static string DetectGameName(List<ScriptEntry> entries)
     {
@@ -108,7 +115,181 @@ public partial class MainWindow : Window
         _isLoadingSettings = false;
         Log($"Galgame Persona Studio v{AppVersion}");
         _ = CheckForUpdateAsync();
+        PreviewKeyDown += MainWindow_PreviewKeyDown;
     }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        _hotkeyHwndSource = (System.Windows.Interop.HwndSource?)PresentationSource.FromVisual(this);
+        if (_hotkeyHwndSource is not null)
+        {
+            _hotkeyHwndSource.AddHook(WndProc);
+            RegisterAllHotkeys();
+        }
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int wmHotkey = 0x0312;
+        if (msg == wmHotkey)
+        {
+            var id = wParam.ToInt32();
+            if (id == HotkeyStartRecordId)
+            {
+                handled = true;
+                Dispatcher.Invoke(() => StartCapture_Click(null!, null!));
+            }
+            else if (id == HotkeyStopRecordId)
+            {
+                handled = true;
+                Dispatcher.Invoke(() => StopCapture_Click(null!, null!));
+            }
+        }
+        return IntPtr.Zero;
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (!_capturingHotkey) return;
+
+        e.Handled = true;
+        var key = e.Key;
+        var modifiers = System.Windows.Input.Keyboard.Modifiers;
+
+        // Ignore pure modifier presses
+        if (key is System.Windows.Input.Key.LeftCtrl or System.Windows.Input.Key.RightCtrl
+            or System.Windows.Input.Key.LeftAlt or System.Windows.Input.Key.RightAlt
+            or System.Windows.Input.Key.LeftShift or System.Windows.Input.Key.RightShift
+            or System.Windows.Input.Key.LWin or System.Windows.Input.Key.RWin)
+            return;
+
+        var modStr = new List<string>();
+        if (modifiers.HasFlag(System.Windows.Input.ModifierKeys.Control)) modStr.Add("Ctrl");
+        if (modifiers.HasFlag(System.Windows.Input.ModifierKeys.Alt)) modStr.Add("Alt");
+        if (modifiers.HasFlag(System.Windows.Input.ModifierKeys.Shift)) modStr.Add("Shift");
+        if (modifiers.HasFlag(System.Windows.Input.ModifierKeys.Windows)) modStr.Add("Win");
+
+        if (modStr.Count == 0)
+        {
+            ShowToast("请同时按下修饰键（Ctrl/Alt/Shift）", isError: true);
+            return;
+        }
+
+        var hotkeyStr = $"{string.Join("+", modStr)}+{key}";
+
+        if (_capturingHotkeyTarget == "start")
+        {
+            _settings.StartRecordHotkey = hotkeyStr;
+            StartHotkeyBox.Text = hotkeyStr;
+            SetStartHotkeyBtn.Content = "设置";
+        }
+        else if (_capturingHotkeyTarget == "stop")
+        {
+            _settings.StopRecordHotkey = hotkeyStr;
+            StopHotkeyBox.Text = hotkeyStr;
+            SetStopHotkeyBtn.Content = "设置";
+        }
+
+        RegisterAllHotkeys();
+        ScheduleSettingsSave();
+        _capturingHotkey = false;
+        _capturingHotkeyTarget = null;
+        ShowToast($"快捷键已设置: {hotkeyStr}");
+    }
+
+    private void RegisterAllHotkeys()
+    {
+        UnregisterAllHotkeys();
+        if (_hotkeyHwndSource is null) return;
+        var handle = _hotkeyHwndSource.Handle;
+        if (handle == IntPtr.Zero) return;
+
+        if (!string.IsNullOrWhiteSpace(_settings.StartRecordHotkey))
+        {
+            var hk = ParseHotkeyString(_settings.StartRecordHotkey);
+            if (hk is not null)
+            {
+                var ok = RegisterHotKey(handle, HotkeyStartRecordId, (uint)hk.Value.Modifiers, (uint)hk.Value.Key);
+                Log(ok ? $"全局快捷键已注册: {_settings.StartRecordHotkey} (开始记录)" : $"快捷键注册失败 (可能冲突): {_settings.StartRecordHotkey}");
+                if (!ok) ShowToast($"快捷键 {_settings.StartRecordHotkey} 注册失败，可能与其他程序冲突", isError: true, durationMs: 4000);
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(_settings.StopRecordHotkey))
+        {
+            var hk = ParseHotkeyString(_settings.StopRecordHotkey);
+            if (hk is not null)
+            {
+                var ok = RegisterHotKey(handle, HotkeyStopRecordId, (uint)hk.Value.Modifiers, (uint)hk.Value.Key);
+                Log(ok ? $"全局快捷键已注册: {_settings.StopRecordHotkey} (停止记录)" : $"快捷键注册失败 (可能冲突): {_settings.StopRecordHotkey}");
+                if (!ok) ShowToast($"快捷键 {_settings.StopRecordHotkey} 注册失败，可能与其他程序冲突", isError: true, durationMs: 4000);
+            }
+        }
+    }
+
+    private void UnregisterAllHotkeys()
+    {
+        if (_hotkeyHwndSource is null) return;
+        var handle = _hotkeyHwndSource.Handle;
+        if (handle == IntPtr.Zero) return;
+        UnregisterHotKey(handle, HotkeyStartRecordId);
+        UnregisterHotKey(handle, HotkeyStopRecordId);
+    }
+
+    private (int Modifiers, int Key)? ParseHotkeyString(string hotkey)
+    {
+        if (string.IsNullOrWhiteSpace(hotkey)) return null;
+        var parts = hotkey.Split('+');
+        if (parts.Length < 2) return null;
+
+        int mods = 0;
+        int key = 0;
+
+        for (var i = 0; i < parts.Length - 1; i++)
+        {
+            var m = parts[i].Trim().ToLowerInvariant() switch
+            {
+                "ctrl" => 0x0002,  // MOD_CONTROL
+                "alt" => 0x0001,   // MOD_ALT
+                "shift" => 0x0004, // MOD_SHIFT
+                "win" => 0x0008,   // MOD_WIN
+                _ => 0
+            };
+            if (m == 0) return null;
+            mods |= m;
+        }
+
+        // Parse key name back to virtual key code
+        var keyName = parts[^1].Trim();
+        if (Enum.TryParse<System.Windows.Input.Key>(keyName, out var wpfKey))
+            key = KeyToVk(wpfKey);
+        else
+            return null;
+
+        return (mods, key);
+    }
+
+    private void SetStartHotkey_Click(object sender, RoutedEventArgs e)
+    {
+        _capturingHotkey = true;
+        _capturingHotkeyTarget = "start";
+        SetStartHotkeyBtn.Content = "按下按键...";
+        ShowToast("请按下快捷键组合（如 Ctrl+F1）");
+    }
+
+    private void SetStopHotkey_Click(object sender, RoutedEventArgs e)
+    {
+        _capturingHotkey = true;
+        _capturingHotkeyTarget = "stop";
+        SetStopHotkeyBtn.Content = "按下按键...";
+        ShowToast("请按下快捷键组合（如 Ctrl+F2）");
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     private static string CacheDir()
     {
@@ -244,9 +425,12 @@ public partial class MainWindow : Window
         StuckThresholdBox.Text = _settings.StuckThreshold <= 0 ? "5" : _settings.StuckThreshold.ToString();
         ChoiceDetectionCheck.IsChecked = _settings.ChoiceDetectionEnabled;
         ChoiceConfigPanel.IsEnabled = _settings.ChoiceDetectionEnabled;
+        ChoiceRegionBox.Text = _settings.ChoiceRegion ?? "";
         SelectCombo(ChoiceModeCombo, string.IsNullOrWhiteSpace(_settings.ChoiceHandleMode) ? "弹窗手动选择" : _settings.ChoiceHandleMode);
         SelectCombo(ChoiceAutoRuleCombo, string.IsNullOrWhiteSpace(_settings.ChoiceAutoRule) ? "选择第一个" : _settings.ChoiceAutoRule);
         ChoiceModeCombo_SelectionChanged(null!, null!); // sync auto-rule visibility
+        StartHotkeyBox.Text = _settings.StartRecordHotkey ?? "";
+        StopHotkeyBox.Text = _settings.StopRecordHotkey ?? "";
     }
 
     private void ReadUiIntoSettings()
@@ -292,8 +476,10 @@ public partial class MainWindow : Window
         _settings.PostClickDelaySeconds = ParseDouble(PostClickDelayBox.Text, 1.2);
         _settings.StuckThreshold = ParseInt(StuckThresholdBox.Text, 5);
         _settings.ChoiceDetectionEnabled = ChoiceDetectionCheck.IsChecked == true;
+        _settings.ChoiceRegion = ChoiceRegionBox.Text.Trim();
         _settings.ChoiceHandleMode = ComboText(ChoiceModeCombo);
         _settings.ChoiceAutoRule = ComboText(ChoiceAutoRuleCombo);
+        // Hotkeys are registered on change via ScheduleSettingsSave + key capture handler
     }
 
     private void ChooseScriptFile_Click(object sender, RoutedEventArgs e)
@@ -384,9 +570,16 @@ public partial class MainWindow : Window
         if (names.Count == 0)
         {
             Log("请先选择至少一个角色。");
+            ShowToast("请先选择至少一个角色", isError: true);
             return;
         }
+
+        // Auto-populate example char filter from selected characters
+        if (string.IsNullOrWhiteSpace(ExampleCharFilterBox.Text))
+            ExampleCharFilterBox.Text = string.Join(", ", names);
+
         SaveSettings();
+        var errorCount = 0;
         foreach (var character in names)
         {
             try
@@ -396,9 +589,14 @@ public partial class MainWindow : Window
             catch (Exception ex)
             {
                 Log($"{character}: 生成失败: {ex.Message}");
+                errorCount++;
             }
         }
         Log("人格生成完成。");
+        if (errorCount == 0)
+            ShowToast($"人格生成完成：{string.Join("、", names)}");
+        else
+            ShowToast($"{errorCount} 个角色生成失败，详见日志", isError: true);
     }
 
     private async Task GenerateForCharacter(string character)
@@ -1133,7 +1331,7 @@ public partial class MainWindow : Window
             var entry = await CaptureRecordOnce();
             Log(entry is null ? "无新增文本或已去重。" : $"记录: {entry.Name}: {entry.Message}");
         }
-        catch (Exception ex) { Log($"采集失败: {ex.Message}"); }
+        catch (Exception ex) { Log($"采集失败: {ex.Message}"); ShowToast("采集失败: " + ex.Message, isError: true); }
     }
 
     private void StartCapture_Click(object sender, RoutedEventArgs e)
@@ -1144,6 +1342,10 @@ public partial class MainWindow : Window
         _autoAdvance?.Stop();
         _lastRecordedName = "";
         _lastRecordedMessage = "";
+
+        StartCaptureBtn.IsEnabled = false;
+        StopCaptureBtn.Style = (Style)FindResource("AccentButton");
+        StopCaptureBtn.FontWeight = FontWeights.SemiBold;
 
         var intervalSec = ParseDouble(CaptureIntervalBox.Text, 1.2);
         var source = ComboText(CaptureSourceCombo);
@@ -1199,13 +1401,15 @@ public partial class MainWindow : Window
                                 && entry.Message.StartsWith(_lastRecordedMessage, StringComparison.Ordinal))
                             {
                                 Log($"文字溢出: \"{Truncate(_lastRecordedMessage, 30)}\" → \"{Truncate(entry.Message, 30)}\" (等待完成)");
+                                var oldMsg = _lastRecordedMessage;
                                 _lastRecordedMessage = entry.Message;
 
-                                // Remove the fragment record we just wrote
+                                // Replace old fragment with new fuller text
                                 var records = LoadRecordEntries();
-                                if (records.Count > 0 && records[^1].Hash == entry.Hash)
+                                var fragIdx = records.FindLastIndex(r => r.Name == entry.Name && r.Message == oldMsg);
+                                if (fragIdx >= 0)
                                 {
-                                    records.RemoveAt(records.Count - 1);
+                                    records.RemoveAt(fragIdx);
                                     SaveRecordEntries(records);
                                 }
                                 return; // Don't advance — text still rendering
@@ -1213,6 +1417,7 @@ public partial class MainWindow : Window
 
                             _lastRecordedName = entry.Name;
                             _lastRecordedMessage = entry.Message;
+                            _emptyOcrCount = 0;
 
                             Log($"记录: {entry.Name}: {Truncate(entry.Message, 60)}");
                             _autoAdvance.ResetStuck();
@@ -1223,8 +1428,12 @@ public partial class MainWindow : Window
                             // === Fix: keep clicking even when no new text ===
                             // OCR is getting the same text (game not advancing)
                             _autoAdvance.StuckCount++;
+                            _emptyOcrCount = 0;
                             ClickAtAdvancePoint();
                             Log($"自动翻页(重试): ({_autoAdvance.ClickX},{_autoAdvance.ClickY}) (stuck={_autoAdvance.StuckCount}/{_autoAdvance.StuckThreshold})");
+
+                            if (_autoAdvance.StuckCount >= _autoAdvance.StuckThreshold)
+                                _autoAdvance.CurrentState = AutoAdvanceManager.State.Stuck;
 
                             if (_autoAdvance.CurrentState == AutoAdvanceManager.State.Stuck)
                             {
@@ -1235,7 +1444,16 @@ public partial class MainWindow : Window
                                     _autoAdvance.ResetStuck();
                             }
                         }
-                        // _lastOcrText is empty → game transitioning → just wait
+                        else
+                        {
+                            // OCR returned empty → likely black screen / cutscene
+                            _emptyOcrCount++;
+                            if (_emptyOcrCount >= 3)
+                            {
+                                ClickAtAdvancePoint();
+                                Log($"过场动画/黑屏: 点击跳过 ({_emptyOcrCount}次空OCR)");
+                            }
+                        }
                     }
                     else
                     {
@@ -1258,6 +1476,8 @@ public partial class MainWindow : Window
             Dispatcher);
         _captureTimer.Start();
         Log($"开始实时记录（间隔 {intervalSec} 秒）。");
+        WindowState = WindowState.Minimized;
+        ShowToast("已开始记录");
     }
 
     private void StopCapture_Click(object sender, RoutedEventArgs e)
@@ -1268,7 +1488,13 @@ public partial class MainWindow : Window
         _autoAdvance = null;
         _lastRecordedName = "";
         _lastRecordedMessage = "";
+        StartCaptureBtn.IsEnabled = true;
+        StopCaptureBtn.Style = (Style)FindResource("SecondaryButton");
+        StopCaptureBtn.FontWeight = FontWeights.Normal;
         Log("已停止实时记录。");
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
+        ShowToast("已停止记录");
     }
 
     private void PickAdvancePoint_Click(object sender, RoutedEventArgs e)
@@ -1306,37 +1532,19 @@ public partial class MainWindow : Window
     {
         Log("[选择肢] 检测选择肢中...");
 
-        // Capture a wide area in lower portion of screen (where choices typically appear)
-        var screenW = (int)System.Windows.SystemParameters.PrimaryScreenWidth;
-        var screenH = (int)System.Windows.SystemParameters.PrimaryScreenHeight;
-        var wideRegion = new System.Drawing.Rectangle(
-            screenW / 6, screenH / 3,
-            screenW * 2 / 3, screenH * 2 / 3
-        );
+        // Use configured choice region, or fall back to a reasonable default
+        var wideRegion = ParseChoiceRegion();
 
         var source = ComboText(CaptureSourceCombo);
         var dpiScale = GetDpiScale();
-        var isUmi = source == "Umi-OCR 本地识别";
-
         Bitmap? wideImage = null;
         List<(int Index, string Text, int ClickX, int ClickY)> choices;
 
         try
         {
             wideImage = CaptureRegion(wideRegion, dpiScale);
-
-            if (isUmi)
-            {
-                // Umi-OCR: use structured blocks with precise bounding box coordinates
-                var ocrBlocks = await OcrUmiBlocks(wideImage);
-                choices = ParseChoiceBlocks(ocrBlocks, wideRegion);
-            }
-            else
-            {
-                // Vision / Clipboard: text-only, fall back to linear estimation
-                var ocrText = await OcrImage(wideImage, source);
-                choices = ParseChoiceText(ocrText, wideRegion);
-            }
+            var ocrText = await OcrImage(wideImage, source);
+            choices = ParseChoiceText(ocrText, wideRegion);
         }
         catch (Exception ex)
         {
@@ -1536,8 +1744,7 @@ public partial class MainWindow : Window
         if (allowed.Count > 0 && (OnlyNamedNowCheck.IsChecked == true || records.Count >= ParseInt(OnlyAfterBox.Text, 200)) && !allowed.Contains(name))
             return null;
 
-        var hash2 = MessageHash(ProcessNameBox.Text, name, message);
-        var entry = new RecordEntry(name, message, ProcessNameBox.Text.Trim(), WindowTitleBox.Text.Trim(), DateTime.Now.ToString("s"), hash2, "capture://" + ProcessNameBox.Text.Trim());
+        var entry = new RecordEntry(name, message);
         records.Add(entry);
         SaveRecordEntries(records);
         return entry;
@@ -1582,8 +1789,50 @@ public partial class MainWindow : Window
 
     private async Task<string> OcrUmi(Bitmap image)
     {
-        var blocks = await OcrUmiBlocks(image);
-        return NormalizeText(string.Join("\n", blocks.Select(b => b.Text)));
+        try
+        {
+            using var ms = new MemoryStream();
+            image.Save(ms, ImageFormat.Png);
+            var b64 = Convert.ToBase64String(ms.ToArray());
+
+            var endpoint = UmiOcrEndpointBox.Text.Trim().TrimEnd('/');
+            if (!endpoint.EndsWith("/api/ocr")) endpoint += "/api/ocr";
+
+            var payload = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["base64"] = b64,
+                ["options"] = new Dictionary<string, object?>
+                {
+                    ["data.format"] = "text"
+                }
+            });
+
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var response = await client.PostAsync(endpoint, new StringContent(payload, Encoding.UTF8, "application/json"));
+            var body = await response.Content.ReadAsStringAsync();
+
+            var result = JsonNode.Parse(body);
+            var code = result?["code"]?.GetValue<int>() ?? -1;
+            if (code == 100)
+            {
+                var data = result?["data"];
+                if (data is JsonArray arr)
+                    return NormalizeText(string.Join("\n", arr
+                        .Select(e => e?["text"]?.GetValue<string>() ?? "")
+                        .Where(s => s.Length > 0)));
+                if (data is not null)
+                    try { return NormalizeText(data.GetValue<string>() ?? ""); } catch { }
+            }
+            else
+            {
+                Log($"Umi-OCR 识别失败: code={code}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"Umi-OCR 请求异常: {ex.Message}");
+        }
+        return "";
     }
 
     private record OcrBlock(string Text, int CenterX, int CenterY);
@@ -1605,8 +1854,11 @@ public partial class MainWindow : Window
 
             var payload = JsonSerializer.Serialize(new Dictionary<string, object?>
             {
-                ["base64"] = b64
-                // No data.format option — returns full structured data with box coordinates
+                ["base64"] = b64,
+                ["options"] = new Dictionary<string, object?>
+                {
+                    ["data.format"] = "text"
+                }
             });
 
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
@@ -1692,6 +1944,25 @@ public partial class MainWindow : Window
                 var r = picker.SelectedRegion;
                 NameRegionBox.Text = $"{r.X},{r.Y},{r.Width},{r.Height}";
                 SaveProcessRegions();
+            }
+        }
+        finally
+        {
+            Show();
+            Activate();
+        }
+    }
+
+    private void PickChoiceRegion_Click(object sender, RoutedEventArgs e)
+    {
+        Hide();
+        try
+        {
+            var picker = new RegionPickerWindow();
+            if (picker.ShowDialog() == true && picker.RegionSelected)
+            {
+                var r = picker.SelectedRegion;
+                ChoiceRegionBox.Text = $"{r.X},{r.Y},{r.Width},{r.Height}";
             }
         }
         finally
@@ -1981,8 +2252,12 @@ public partial class MainWindow : Window
     private void LoadKnownRecordHashes()
     {
         _knownRecordHashes.Clear();
+        var processName = ProcessNameBox.Text.Trim();
         foreach (var record in LoadRecordEntries())
-            if (!string.IsNullOrWhiteSpace(record.Hash)) _knownRecordHashes.Add(record.Hash);
+        {
+            if (!string.IsNullOrWhiteSpace(record.Name) || !string.IsNullOrWhiteSpace(record.Message))
+                _knownRecordHashes.Add(MessageHash(processName, record.Name, record.Message));
+        }
     }
 
     private string RecordFile() => Path.Combine(RecordOutputBox.Text.Trim(), SafeName(ProcessNameBox.Text.Trim()) + ".json");
@@ -2014,6 +2289,18 @@ public partial class MainWindow : Window
         var parts = text.Split(',', StringSplitOptions.TrimEntries);
         if (parts.Length != 4) throw new FormatException("区域格式应为 x,y,w,h");
         return new Rectangle(int.Parse(parts[0]), int.Parse(parts[1]), int.Parse(parts[2]), int.Parse(parts[3]));
+    }
+
+    private Rectangle ParseChoiceRegion()
+    {
+        if (!string.IsNullOrWhiteSpace(ChoiceRegionBox.Text))
+        {
+            try { return ParseRegion(ChoiceRegionBox.Text); }
+            catch { Log("[选择肢] 区域格式无效，使用默认区域。"); }
+        }
+        var w = (int)System.Windows.SystemParameters.PrimaryScreenWidth;
+        var h = (int)System.Windows.SystemParameters.PrimaryScreenHeight;
+        return new Rectangle(w / 6, h / 3, w * 2 / 3, h * 2 / 3);
     }
 
     private static (string Name, string Message) ParseNameAndMessage(string text)
@@ -2086,6 +2373,94 @@ public partial class MainWindow : Window
     private static object ToOutputEntry(ScriptEntry entry) => new { name = entry.Name, message = entry.Message, source_file = entry.SourceFile, source_index = entry.SourceIndex, source_line = entry.SourceLine };
     private static object ToCorpusEntry(ScriptEntry entry) => new { name = entry.Name, message = entry.Message };
     private static double Ratio(List<ScriptEntry> entries, Func<ScriptEntry, bool> predicate) => entries.Count == 0 ? 0 : entries.Count(predicate) / (double)entries.Count;
+    private void ShowToast(string message, bool isError = false, int durationMs = 2500)
+    {
+        try
+        {
+            ToastText.Text = message;
+
+            if (isError)
+            {
+                ToastBorder.Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(254, 226, 226));
+                ToastBorder.BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(248, 113, 113));
+                ToastText.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(153, 27, 27));
+            }
+            else
+            {
+                ToastBorder.Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(219, 234, 254));
+                ToastBorder.BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(96, 165, 250));
+                ToastText.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 64, 175));
+            }
+
+            ToastBorder.Opacity = 1;
+            ToastBorder.Visibility = Visibility.Visible;
+
+            // Restore window on error (user asked for minimize-on-record)
+            if (isError && WindowState == WindowState.Minimized)
+                WindowState = WindowState.Normal;
+
+            var timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(durationMs)
+            };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                var fadeOut = new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(300));
+                fadeOut.Completed += (_, _) => ToastBorder.Visibility = Visibility.Collapsed;
+                ToastBorder.BeginAnimation(Border.OpacityProperty, fadeOut);
+            };
+            timer.Start();
+        }
+        catch (Exception ex)
+        {
+            Log($"Toast 显示失败: {ex.Message}");
+        }
+    }
+
+    private static int KeyToVk(System.Windows.Input.Key key)
+    {
+        var k = (int)key;
+        // WPF Key values differ from Win32 VK codes for common ranges
+        if (k is >= 44 and <= 69) return k + 21;  // A-Z: 44→65(VK_A), offset +21
+        if (k is >= 34 and <= 43) return k + 14;  // D0-D9: 34→48(VK_0), offset +14
+        if (k is >= 90 and <= 113) return k + 22; // F1-F24: 90→112(VK_F1), offset +22
+        if (k is >= 74 and <= 83) return k + 22;  // NumPad0-9: 74→96(VK_NUMPAD0)
+        return key switch
+        {
+            System.Windows.Input.Key.Enter => 0x0D,
+            System.Windows.Input.Key.Space => 0x20,
+            System.Windows.Input.Key.Tab => 0x09,
+            System.Windows.Input.Key.Back => 0x08,
+            System.Windows.Input.Key.Escape => 0x1B,
+            System.Windows.Input.Key.Left => 0x25,
+            System.Windows.Input.Key.Up => 0x26,
+            System.Windows.Input.Key.Right => 0x27,
+            System.Windows.Input.Key.Down => 0x28,
+            System.Windows.Input.Key.PageUp => 0x21,
+            System.Windows.Input.Key.PageDown => 0x22,
+            System.Windows.Input.Key.Home => 0x24,
+            System.Windows.Input.Key.End => 0x23,
+            System.Windows.Input.Key.Insert => 0x2D,
+            System.Windows.Input.Key.Delete => 0x2E,
+            System.Windows.Input.Key.OemTilde => 0xC0,
+            System.Windows.Input.Key.OemMinus => 0xBD,
+            System.Windows.Input.Key.OemPlus => 0xBB,
+            System.Windows.Input.Key.OemOpenBrackets => 0xDB,
+            System.Windows.Input.Key.OemCloseBrackets => 0xDD,
+            System.Windows.Input.Key.OemSemicolon => 0xBA,
+            System.Windows.Input.Key.OemQuotes => 0xDE,
+            System.Windows.Input.Key.OemComma => 0xBC,
+            System.Windows.Input.Key.OemPeriod => 0xBE,
+            System.Windows.Input.Key.Divide => 0x6F,
+            System.Windows.Input.Key.Multiply => 0x6A,
+            System.Windows.Input.Key.Subtract => 0x6D,
+            System.Windows.Input.Key.Add => 0x6B,
+            System.Windows.Input.Key.Decimal => 0x6E,
+            _ => k
+        };
+    }
+
     private static string RenderSoul(string character, JsonObject persona) => $"# {character} SOUL\n\n## Persona Prompt\n{persona["persona_prompt"]}\n\n## Error Reply\n{persona["error_reply"]}\n";
     private static string NormalizeText(string text) => string.Join("\n", text.Replace("\r", "\n").Split('\n').Select(x => Regex.Replace(x, @"\s+", " ").Trim()).Where(x => x.Length > 0));
     private static string SafeName(string value) => Regex.Replace(string.IsNullOrWhiteSpace(value) ? "unknown" : value, """[\\/:*?"<>|]+""", "_");
@@ -2128,7 +2503,7 @@ public partial class MainWindow : Window
 }
 
 public record ScriptEntry(string Name, string Message, string SourceFile, int Order, int? SourceIndex, int? SourceLine);
-public record RecordEntry(string Name, string Message, string ProcessName, string WindowTitle, string CapturedAt, string Hash, string SourceFile);
+public record RecordEntry(string Name, string Message);
 public record EvidenceResult(List<ScriptEntry> Entries, Dictionary<string, object> Metadata);
 public record RagBlock(int Index, double Score, string Direction);
 
@@ -2178,8 +2553,13 @@ public sealed class AppSettings
     public double PostClickDelaySeconds { get; set; } = 1.2;
     public int StuckThreshold { get; set; } = 5;
     public bool ChoiceDetectionEnabled { get; set; }
+    public string? ChoiceRegion { get; set; }
     public string? ChoiceHandleMode { get; set; } = "弹窗手动选择";
     public string? ChoiceAutoRule { get; set; } = "第一个";
+
+    // Hotkeys
+    public string? StartRecordHotkey { get; set; } = "Ctrl+F1";
+    public string? StopRecordHotkey { get; set; } = "Ctrl+F2";
 }
 
 public class RegionMemory
