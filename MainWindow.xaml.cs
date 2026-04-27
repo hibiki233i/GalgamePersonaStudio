@@ -479,7 +479,8 @@ public partial class MainWindow : Window
         _settings.ChoiceRegion = ChoiceRegionBox.Text.Trim();
         _settings.ChoiceHandleMode = ComboText(ChoiceModeCombo);
         _settings.ChoiceAutoRule = ComboText(ChoiceAutoRuleCombo);
-        // Hotkeys are registered on change via ScheduleSettingsSave + key capture handler
+        _settings.StartRecordHotkey = StartHotkeyBox.Text.Trim();
+        _settings.StopRecordHotkey = StopHotkeyBox.Text.Trim();
     }
 
     private void ChooseScriptFile_Click(object sender, RoutedEventArgs e)
@@ -1395,8 +1396,10 @@ public partial class MainWindow : Window
                         {
                             // === Fix: typewriter text detection ===
                             // Same speaker + text grows by prefix match (≤15 chars) → still rendering
+                            // Skip on first capture (empty _lastRecordedMessage matches everything)
                             var textGrowth = entry.Message.Length - _lastRecordedMessage.Length;
-                            if (entry.Name == _lastRecordedName
+                            if (!string.IsNullOrEmpty(_lastRecordedMessage)
+                                && entry.Name == _lastRecordedName
                                 && textGrowth is > 0 and <= 15
                                 && entry.Message.StartsWith(_lastRecordedMessage, StringComparison.Ordinal))
                             {
