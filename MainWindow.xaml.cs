@@ -882,6 +882,15 @@ public partial class MainWindow : Window
 
         if (allLines.Count == 0) return [];
 
+        var hsceneFiltered = 0;
+        if (_settings.FilterHScene)
+        {
+            var before = allLines.Count;
+            allLines = allLines.Where(x => !IsHSceneContent(x)).ToList();
+            hsceneFiltered = before - allLines.Count;
+        }
+        if (allLines.Count == 0) return [];
+
         if (embeddingMode != "不使用嵌入")
         {
             try
@@ -916,7 +925,8 @@ public partial class MainWindow : Window
                     .Select(x => $"{candidates[x.Idx].Name}: {candidates[x.Idx].Message}")
                     .ToList();
 
-                Log($"[世界观] RAG 检索: {allLines.Count}条全剧本→{candidates.Count}候选项→{result.Count}条 ({embeddingMode})");
+                var extra = hsceneFiltered > 0 ? $" (H过滤{hsceneFiltered}条)" : "";
+                Log($"[世界观] RAG 检索: {allLines.Count}条全剧本→{candidates.Count}候选项→{result.Count}条 ({embeddingMode}){extra}");
                 return result;
             }
             catch (Exception ex)
@@ -925,7 +935,8 @@ public partial class MainWindow : Window
             }
         }
 
-        Log($"[世界观] 均匀采样: {allLines.Count}条全剧本");
+        var extra2 = hsceneFiltered > 0 ? $" (H过滤{hsceneFiltered}条)" : "";
+        Log($"[世界观] 均匀采样: {allLines.Count}条全剧本{extra2}");
         var sampled = EvenlySpaced(allLines, 25);
         return sampled.Select(e => $"{e.Name}: {e.Message}").ToList();
     }
@@ -1115,7 +1126,7 @@ public partial class MainWindow : Window
 
         ## 输出要求
         输出严格 JSON 对象，必须包含以下字段且遵循每字段的格式约束：
-        { "persona_prompt": string, "traits": array, "dialogue_pairs": array, "example_exchanges": array, "error_reply": string }
+        { "persona_prompt": string, "traits": array, "dialogue_pairs": array, "example_exchanges": array, "error_reply": string, "world_summary": string }
         {{worldSection}}
 
         ============================================================
@@ -1159,6 +1170,16 @@ public partial class MainWindow : Window
         **明确排除：**
         - 整段只有喘声/拟声词/语气词的上下文（如「ああっ」「嗯啊嗯啊」「哈啊啊」）
         - 无实际语义内容的片段
+
+        ============================================================
+        ### world_summary（世界观总结）
+        基于上方提供の ## 世界観背景 中的剧本原文，总结该角色所处世界的核心设定。输出 4-8 句话的连贯段落（150-400 字），覆盖：
+        - 时代与地点：故事发生的时代背景与主要场景
+        - 社会结构：关键势力、组织、社会阶层、权力关系
+        - 超自然/特殊设定：魔法、科技、异能等非常规元素（如原文无则写"无明显超自然设定"）
+        - 与角色的关联：这个世界的设定如何影响目标角色「{{character}}」的身份、处境和人际关系
+        仅依据提供的剧本原文总结，不编造原文中未出现的信息。如果原文信息不足，相应维度标注"信息不足"。
+        如果上方没有提供 ## 世界観背景 内容，输出空字符串 ""。
 
         ============================================================
         ### error_reply
@@ -1305,6 +1326,8 @@ public partial class MainWindow : Window
             File.WriteAllText(Path.Combine(dir, "example_exchanges.json"), exchangesNode.ToJsonString(JsonOptions()));
         if (evidence.Metadata.TryGetValue("rag_blocks", out var blocks))
             File.WriteAllText(Path.Combine(dir, "rag_evidence.json"), JsonSerializer.Serialize(blocks, JsonOptions()));
+        if (persona["world_summary"] is JsonNode wsNode && wsNode.GetValue<string>() is string ws && !string.IsNullOrWhiteSpace(ws))
+            File.WriteAllText(Path.Combine(dir, "world_summary.txt"), ws, Encoding.UTF8);
         if (ExportSoulCheck.IsChecked == true)
             File.WriteAllText(Path.Combine(dir, "SOUL.md"), RenderSoul(character, persona));
     }
@@ -2448,7 +2471,14 @@ public partial class MainWindow : Window
         };
     }
 
-    private static string RenderSoul(string character, JsonObject persona) => $"# {character} SOUL\n\n## Persona Prompt\n{persona["persona_prompt"]}\n\n## Error Reply\n{persona["error_reply"]}\n";
+    private static string RenderSoul(string character, JsonObject persona)
+    {
+        var worldSummary = persona["world_summary"]?.GetValue<string>();
+        var worldSection = !string.IsNullOrWhiteSpace(worldSummary)
+            ? $"\n\n## World Setting\n{worldSummary}\n"
+            : "";
+        return $"# {character} SOUL\n\n## Persona Prompt\n{persona["persona_prompt"]}{worldSection}\n\n## Error Reply\n{persona["error_reply"]}\n";
+    }
     private static string NormalizeText(string text) => string.Join("\n", text.Replace("\r", "\n").Split('\n').Select(x => Regex.Replace(x, @"\s+", " ").Trim()).Where(x => x.Length > 0));
     private static string SafeName(string value) => Regex.Replace(string.IsNullOrWhiteSpace(value) ? "unknown" : value, """[\\/:*?"<>|]+""", "_");
     private static string MessageHash(string process, string name, string message) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{process}\n{name}\n{Regex.Replace(message, @"\s+", "")}"))).ToLowerInvariant();
