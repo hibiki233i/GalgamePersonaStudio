@@ -33,7 +33,7 @@ public partial class MainWindow : Window
     private const string DefaultEmbeddingModel = "text-embedding-3-large";
     private const string DefaultVisionEndpoint = "https://api.openai.com/v1/chat/completions";
     private const string DefaultVisionModel = "gpt-4o-mini";
-    private const string AppVersion = "1.1.0";
+    private const string AppVersion = "1.1.1";
     private const string RepoOwner = "hibiki233i";
     private const string RepoName = "GalgamePersonaStudio";
 
@@ -875,39 +875,30 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task<List<string>> ExtractWorldContextLinesAsync(string embeddingMode, string character)
     {
-        var narratorNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "", "旁白", "叙述", "narrator", "narration", "描述"
-        };
-
-        var narratorLines = _entries
-            .Where(e => narratorNames.Contains(e.Name.Trim())
-                         && e.Message.Length >= 20
-                         && !PureDialoguePattern.IsMatch(e.Message)
-                         && !e.Message.All(c => c == e.Message[0]))
-            .Select(e => e.Message)
-            .Distinct()
+        // Use ALL entries as candidate pool — world info appears in dialogue, not just narration
+        var allLines = _entries
+            .Where(e => IsQualityEvidence(e) && e.Message.Length >= 15)
             .ToList();
 
-        if (narratorLines.Count == 0) return [];
+        if (allLines.Count == 0) return [];
 
-        // RAG retrieval if embedding is enabled
-        if (embeddingMode != "不使用嵌入" && narratorLines.Count > 10)
+        if (embeddingMode != "不使用嵌入")
         {
             try
             {
                 var directions = new List<string>
                 {
-                    "galgame世界观背景：故事发生的时代、地点、社会结构、超自然元素",
-                    "galgame剧情核心：" + character + "相关的关键事件、势力冲突、历史",
-                    "galgame社会关系：" + character + "的社会地位、所属组织、人际关系网"
+                    "galgame世界观背景：故事发生的时代、地点、社会结构、超自然元素、势力分布",
+                    "galgame剧情核心：" + character + "相关的关键事件、势力冲突、历史背景",
+                    "galgame社会关系：" + character + "的社会地位、所属组织、人际关系网",
+                    "galgame日常环境：" + character + "的日常生活场景、学校/工作/家庭环境"
                 };
 
-                var withIdx = narratorLines
-                    .Select((text, idx) => (text, idx, truncated: text.Length > 200 ? text[..200] : text))
-                    .ToList();
+                var candidates = EvenlySpaced(allLines, Math.Min(400, allLines.Count));
+                var contexts = candidates.Select(e => $"{e.Name}: {e.Message}".Length > 300
+                    ? $"{e.Name}: {e.Message}"[..300] : $"{e.Name}: {e.Message}").ToList();
 
-                var allTexts = directions.Concat(withIdx.Select(x => x.truncated)).ToList();
+                var allTexts = directions.Concat(contexts).ToList();
                 var vectors = await EmbedTexts(allTexts, embeddingMode);
 
                 var queryVecs = vectors.Take(directions.Count).ToList();
@@ -915,19 +906,17 @@ public partial class MainWindow : Window
 
                 var scored = new List<(int Idx, double Score)>();
                 foreach (var qv in queryVecs)
-                {
-                    scored.AddRange(ctxVecs.Select((cv, i) => (withIdx[i].idx, Cosine(qv, cv))));
-                }
+                    scored.AddRange(ctxVecs.Select((cv, i) => (i, Cosine(qv, cv))));
 
                 var result = scored
                     .GroupBy(x => x.Idx)
                     .Select(g => (Idx: g.Key, Score: g.Average(x => x.Score)))
                     .OrderByDescending(x => x.Score)
-                    .Take(15)
-                    .Select(x => narratorLines[x.Idx])
+                    .Take(20)
+                    .Select(x => $"{candidates[x.Idx].Name}: {candidates[x.Idx].Message}")
                     .ToList();
 
-                Log($"[世界观] RAG 检索完成: {narratorLines.Count}条→{result.Count}条 (embedding={embeddingMode})");
+                Log($"[世界观] RAG 检索: {allLines.Count}条全剧本→{candidates.Count}候选项→{result.Count}条 ({embeddingMode})");
                 return result;
             }
             catch (Exception ex)
@@ -936,15 +925,10 @@ public partial class MainWindow : Window
             }
         }
 
-        // Fallback: even sampling for diversity
-        Log($"[世界观] 均匀采样: {narratorLines.Count}条旁白");
-        if (narratorLines.Count <= 30) return narratorLines;
-        return Enumerable.Range(0, 30)
-            .Select(i => narratorLines[(int)Math.Round(i * (narratorLines.Count - 1) / 29.0)])
-            .ToList();
+        Log($"[世界观] 均匀采样: {allLines.Count}条全剧本");
+        var sampled = EvenlySpaced(allLines, 25);
+        return sampled.Select(e => $"{e.Name}: {e.Message}").ToList();
     }
-
-    private static readonly Regex PureDialoguePattern = new(@"^[「『""].*[」』""]$|^[\p{P}\s]+$", RegexOptions.Compiled);
 
     private static string BuildRichPersonaPrompt(string character, JsonArray traits)
     {
